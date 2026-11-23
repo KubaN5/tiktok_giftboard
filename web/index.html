@@ -93,14 +93,14 @@
 </header>
 <main>
   <div class="stats">
-    <div class="stat"><small>Diamanty</small><b id="s-d">0</b></div>
+    <div class="stat"><small>Mincí</small><b id="s-d">0</b></div>
     <div class="stat" title="Odhad: tvůrce dostane zhruba polovinu ceny daru (~0,005 USD za minci), před daní a poplatky"><small>Výdělek ≈</small><b id="s-k">0 Kč</b></div>
     <div class="stat"><small>Dárců</small><b id="s-u">0</b></div>
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
   </div>
   <div class="gapnote" id="gapnote"></div>
   <table>
-    <thead><tr><th class="rank">#</th><th>Účet</th><th class="n">💎</th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
+    <thead><tr><th class="rank">#</th><th>Účet</th><th class="n" title="Mince = cena darů, kterou zaplatili diváci">🪙</th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Načítám…</td></tr></tbody>
   </table>
   <section class="cov" id="cov">
@@ -108,7 +108,7 @@
     <div class="hint">Kdy během vysílání sběrač nesbíral (pád PC, výpadek internetu, pozdní spuštění) – dary z té doby chybí. Řídí se zvoleným obdobím nebo vysíláním. Zelená = sbíralo se, červená = výpadek (od 1 min).</div>
     <div id="covlist"></div>
   </section>
-  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. 💎 = cena daru v mincích. Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p></footer>
+  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. 🪙 = mince, cena darů, kterou zaplatili diváci (růže = 1). Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p></footer>
 </main>
 <script src="config.js"></script>
 <script>
@@ -169,7 +169,7 @@ async function loadStreams() {
   const sel = $("#stream"), cur = sel.value;
   sel.innerHTML = '<option value="">— konkrétní vysílání —</option>' + list.map(x => {
     const d = new Date(x.started_at).toLocaleString("cs-CZ", {day:"numeric", month:"numeric", hour:"2-digit", minute:"2-digit"});
-    return `<option value="${x.id}">${d}${x.ended_at ? "" : " 🔴"} · ${fmt(x.diamonds)} 💎${missing[x.id] ? " ⚠️" : ""}</option>`;
+    return `<option value="${x.id}">${d}${x.ended_at ? "" : " 🔴"} · ${fmt(x.diamonds)} 🪙${missing[x.id] ? " ⚠️" : ""}</option>`;
   }).join("");
   sel.value = cur;
   return list;
