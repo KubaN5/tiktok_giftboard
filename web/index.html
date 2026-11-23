@@ -21,6 +21,15 @@
   .hero .sub::before, .hero .sub::after { content:"🛍️"; margin:0 8px; }
   .hero .who { margin-top:10px; color:var(--muted); font-size:14px; }
   .hero .who span { color:var(--fg); font-weight:600; }
+  .status { position:relative; margin-top:12px; display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+  .pill { font-size:13px; padding:4px 11px; border-radius:999px; background:rgba(0,0,0,.35); border:1px solid var(--line); color:var(--muted); }
+  .pill::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; background:currentColor; vertical-align:1px; }
+  .pill b { color:var(--fg); font-weight:600; }
+  .pill.on { color:#4ade80; border-color:rgba(74,222,128,.35); }
+  .pill.on::before { animation:pulse 2s infinite; }
+  .pill.off { color:#ff6b86; border-color:rgba(254,44,85,.45); }
+  .pill .rec { color:#ff6b86; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
   .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   select, button { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
   .tabs button.on { border-color:var(--acc); color:#fff; background:#2a1820; }
@@ -50,6 +59,7 @@
     <h1>Galerie hanby</h1>
     <div class="sub">Shopaholic Adel</div>
     <div class="who">🎁 Žebříček dárců <span id="who"></span></div>
+    <div class="status" id="collectors"></div>
   </div>
   <div class="bar">
     <select id="streamer"></select>
@@ -73,7 +83,7 @@
     <thead><tr><th class="rank">#</th><th>Účet</th><th class="n">💎</th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Načítám…</td></tr></tbody>
   </table>
-  <footer><p>Obnovuje se každých 10 s. 💎 = hodnota daru v mincích/diamantech podle TikToku.</p></footer>
+  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. 💎 = hodnota daru v mincích/diamantech podle TikToku.</p></footer>
 </main>
 <script src="config.js"></script>
 <script>
@@ -126,6 +136,22 @@ async function loadStreams() {
   return list;
 }
 
+// Stav sběračů (heartbeat každých 30 s; online = zpráva za poslední 2 min)
+async function loadCollectors() {
+  const box = $("#collectors");
+  let list;
+  try { list = await rpc("collector_status"); } catch (e) { console.warn(e); box.innerHTML = ""; return; }
+  if (!list.length) { box.innerHTML = '<span class="pill">Sběrač zatím nehlásil stav</span>'; return; }
+  box.innerHTML = list.map(c => {
+    const name = `Sběrač <b>${esc(c.name)}</b>`;
+    if (!c.online) return `<span class="pill off" title="Naposledy: ${esc(new Date(c.last_seen).toLocaleString("cs-CZ"))}">${name} offline · před ${ago(c.last_seen)}</span>`;
+    const extra = c.recording?.length ? ' · <span class="rec">⏺ nahrává</span>'
+                : c.live?.length ? " · sbírá LIVE"
+                : c.record_enabled ? " · čeká na LIVE, nahrávání zapnuto" : " · čeká na LIVE";
+    return `<span class="pill on" title="Běží od ${esc(new Date(c.started_at).toLocaleString("cs-CZ"))}">${name} online${extra}</span>`;
+  }).join("");
+}
+
 async function refresh() {
   try {
     const s = $("#streamer").value;
@@ -169,8 +195,8 @@ $("#streamer").addEventListener("change", () => { streamId = ""; refresh(); });
 (async () => {
   if (!CFG.supabaseUrl || !CFG.supabaseKey) { showError("Chybí konfigurace Supabase (config.js)."); return; }
   try { await loadStreamers(); } catch (e) { showError(e.message); return; }
-  await refresh();
-  setInterval(async () => { try { await loadStreamers(); } catch {} refresh(); }, 10000);
+  await refresh(); loadCollectors();
+  setInterval(async () => { try { await loadStreamers(); } catch {} refresh(); loadCollectors(); }, 10000);
 })();
 </script>
 </body>

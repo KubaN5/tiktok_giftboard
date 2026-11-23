@@ -1,7 +1,7 @@
 -- TikTok LIVE gift leaderboard – schéma pro Supabase (Postgres)
 -- Spusť v Supabase: SQL Editor -> New query -> vložit -> Run. Skript je idempotentní.
 -- Pozn.: advisor hlásí 'SECURITY DEFINER function executable by anon' – je to záměr:
--- web smí volat jen tyto tři read-only funkce, tabulky samotné veřejně čitelné nejsou.
+-- web smí volat jen tyto read-only funkce, tabulky samotné veřejně čitelné nejsou.
 
 -- ---------------------------------------------------------------- tabulky
 create table if not exists public.streamers (
@@ -39,6 +39,17 @@ do $$ begin
   end if;
 end $$;
 
+-- Heartbeat sběračů: každý běžící sběrač sem každých ~30 s zapíše, že žije (web ukazuje online/offline)
+create table if not exists public.collectors (
+    name            text primary key,              -- COLLECTOR_NAME nebo název počítače
+    started_at      timestamptz not null default now(),
+    last_seen       timestamptz not null default now(),
+    streamers       text[]      not null default '{}',  -- hlídané účty
+    live            text[]      not null default '{}',  -- účty, jejichž LIVE právě sbírá
+    recording       text[]      not null default '{}',  -- účty, jejichž LIVE právě nahrává
+    record_enabled  boolean     not null default false
+);
+
 create index if not exists ix_gifts_streamer_ts on public.gifts (streamer, ts);
 create index if not exists ix_gifts_stream      on public.gifts (stream_id);
 create index if not exists ix_gifts_user_ts     on public.gifts (user_id, ts desc);
@@ -50,11 +61,13 @@ create index if not exists ix_streams_streamer  on public.streams (streamer, sta
 alter table public.streamers enable row level security;
 alter table public.streams   enable row level security;
 alter table public.gifts     enable row level security;
+alter table public.collectors enable row level security;
 
 -- Sběrač zapisuje secret klíčem = role service_role. Novější projekty jí práva k tabulkám
 -- nepřidělují automaticky (jinak: "permission denied for table streamers", 403).
 grant usage on schema public to service_role;
 grant select, insert, update on public.streamers, public.streams, public.gifts to service_role;
+grant select, insert, update on public.collectors to service_role;
 grant usage, select on all sequences in schema public to service_role;
 
 -- ---------------------------------------------------------------- funkce pro web
@@ -132,9 +145,23 @@ language sql stable security definer set search_path = public as $$
     limit least(greatest(p_limit, 1), 500);
 $$;
 
+-- Stav sběračů pro web; online = heartbeat za poslední 2 minuty
+create or replace function public.collector_status()
+returns table (name text, online boolean, last_seen timestamptz, started_at timestamptz,
+               streamers text[], live text[], recording text[], record_enabled boolean)
+language sql stable security definer set search_path = public as $$
+    select c.name, c.last_seen > now() - interval '2 minutes', c.last_seen, c.started_at,
+           c.streamers, c.live, c.recording, c.record_enabled
+    from collectors c
+    where c.last_seen > now() - interval '30 days'
+    order by c.last_seen desc;
+$$;
+
 revoke all on function public.list_streamers()                       from public, anon, authenticated;
 revoke all on function public.list_streams(text)                     from public, anon, authenticated;
 revoke all on function public.leaderboard(text, text, bigint, int)   from public, anon, authenticated;
+revoke all on function public.collector_status()                     from public, anon, authenticated;
 grant execute on function public.list_streamers()                     to anon, authenticated;
 grant execute on function public.list_streams(text)                   to anon, authenticated;
 grant execute on function public.leaderboard(text, text, bigint, int) to anon, authenticated;
+grant execute on function public.collector_status()                   to anon, authenticated;

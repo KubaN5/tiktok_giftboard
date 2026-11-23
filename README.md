@@ -76,6 +76,11 @@ Jak to funguje: během vysílání se zapisuje `.ts` (přehratelný i při pádu
 převede na `.mp4`. Při výpadku spojení se nahrávání naváže dalším dílem (`…_dil2.mp4`). Na dary nemá nahrávání vliv –
 když selže, sběr darů běží dál. Záznamy jsou jen pro vlastní potřebu – video patří autorce vysílání.
 
+## Stav sběrače
+Sběrač každých 30 s zapíše do Supabase, že běží. Web pak v hlavičce ukazuje **online** (a jestli sbírá / nahrává LIVE),
+nebo **offline** s časem poslední zprávy (po 2 min bez zprávy). Jméno sběrače = název PC, jinak `COLLECTOR_NAME` v `.env`
+(hodí se při dvou sběračích, např. `PC` a `Raspberry`).
+
 ## Poznámky
 - Zachytí jen vysílání, během kterých sběrač běží.
 - Používá neoficiální knihovnu [TikTokLive](https://github.com/isaackogan/TikTokLive) – TikTok

@@ -15,6 +15,7 @@ Konfigurace přes proměnné prostředí (nebo soubor .env vedle skriptu):
     RECORD_QUALITY        origin | uhd | hd | sd | ld (výchozí origin = nejlepší dostupná)
     RECORD_SHARE_DIR      volitelné – hotová MP4 přesunout sem (např. složka OneDrive / Google Drive)
     FFMPEG_PATH           volitelné – cesta k ffmpeg, pokud není v PATH
+    COLLECTOR_NAME        volitelné – jméno sběrače na webu (výchozí název počítače)
 
 Použití:
     python tracker.py @ucet1 [@ucet2 ...] [--interval 60]
@@ -29,6 +30,7 @@ import json
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -37,6 +39,9 @@ from pathlib import Path
 import httpx
 
 log = logging.getLogger("collector")
+HEARTBEAT_EVERY = 30   # s; web považuje sběrač za offline po 2 min bez zprávy
+LIVE: set[str] = set()        # účty, jejichž LIVE právě sbíráme
+RECORDING: set[str] = set()   # účty, jejichž LIVE právě nahráváme
 
 
 def load_dotenv(path: Path) -> None:
@@ -96,6 +101,25 @@ class Store:
                         params={"id": f"eq.{stream_id}", "ended_at": "is.null"},
                         headers={"Prefer": "return=minimal"},
                         json={"ended_at": now_iso()})
+
+    async def heartbeat(self, name: str, streamers: list[str], record_enabled: bool) -> None:
+        """Každých 30 s zapíše do tabulky collectors, že sběrač žije (web ukazuje online/offline)."""
+        started, failed = now_iso(), False
+        while True:
+            try:
+                await self._req("POST", "/collectors", params={"on_conflict": "name"},
+                                headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                                json={"name": name, "started_at": started, "last_seen": now_iso(),
+                                      "streamers": streamers, "live": sorted(LIVE),
+                                      "recording": sorted(RECORDING), "record_enabled": record_enabled})
+                if failed:
+                    log.info("Heartbeat zase funguje")
+                failed = False
+            except Exception as ex:
+                if not failed:                                  # nezahlcovat log každých 30 s
+                    log.warning("Heartbeat se nepodařilo zapsat: %s", ex)
+                failed = True
+            await asyncio.sleep(HEARTBEAT_EVERY)
 
     def add_gift(self, row: dict) -> None:
         row.setdefault("ts", now_iso())
@@ -211,6 +235,7 @@ class Recorder:
             part = folder / (f"{base}.ts" if n == 1 else f"{base}_dil{n}.ts")
             self.parts.append(part)
             log.info("@%s: nahrávám video → %s", self.streamer, part)
+            RECORDING.add(self.streamer)
             self.proc = await asyncio.create_subprocess_exec(
                 self.cfg.ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error",
                 "-rw_timeout", "20000000",                            # 20 s bez dat → ffmpeg skončí
@@ -223,6 +248,7 @@ class Recorder:
                 tail.append(line.decode(errors="replace").strip())
             code = await self.proc.wait()
             self.proc = None
+            RECORDING.discard(self.streamer)
             if self.stopping:
                 break
             size = part.stat().st_size if part.exists() else 0
@@ -235,6 +261,7 @@ class Recorder:
     async def stop(self) -> None:
         """Ukončí nahrávání slušně (klávesa q), aby se soubor korektně uzavřel, a počká na převod."""
         self.stopping = True
+        RECORDING.discard(self.streamer)
         proc = self.proc
         if proc and proc.returncode is None:
             try:
@@ -293,6 +320,7 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
         state: dict = {"stream_id": None, "rec": None}
 
         async def finish(*_):
+            LIVE.discard(streamer)
             rec, state["rec"] = state["rec"], None
             if rec is not None:
                 await rec.stop()
@@ -312,6 +340,7 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
             @client.on(ConnectEvent)
             async def _on_connect(ev: ConnectEvent):
                 state["stream_id"] = await store.open_stream(streamer, str(ev.room_id))
+                LIVE.add(streamer)
                 log.info("@%s je LIVE (room %s) – sbírám dary", streamer, ev.room_id)
                 if rec_cfg and state["rec"] is None:
                     state["rec"] = Recorder(streamer, client, rec_cfg)
@@ -383,7 +412,9 @@ async def run(usernames: list[str], interval: int) -> None:
     for s in streamers:
         await store.ensure_streamer(s)
     log.info("Hlídám: %s (kontrola každých %ss)", ", ".join("@" + s for s in streamers), interval)
-    await asyncio.gather(store.writer(), *(watch(s, store, interval, rec_cfg) for s in streamers))
+    name = (os.getenv("COLLECTOR_NAME") or socket.gethostname() or "sběrač").strip()[:60]
+    await asyncio.gather(store.writer(), store.heartbeat(name, streamers, bool(rec_cfg)),
+                         *(watch(s, store, interval, rec_cfg) for s in streamers))
 
 
 def main() -> None:

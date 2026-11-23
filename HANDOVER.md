@@ -51,12 +51,14 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - `streamers(name pk)` – sledované účty (web je bere odsud).
 - `streams(id, streamer, room_id, started_at, ended_at)`, unique `(streamer, room_id)`; `ended_at null` = právě LIVE.
 - `gifts(id, stream_id, streamer, ts, user_id, unique_id, nickname, gift_id, gift_name, count, diamonds, msg_id unique)`.
+- `collectors(name pk, started_at, last_seen, streamers[], live[], recording[], record_enabled)` – heartbeat sběračů
+  (sběrač upsertuje každých 30 s; `name` = `COLLECTOR_NAME` nebo hostname PC).
 - RPC pro web (SECURITY DEFINER, execute pro anon): `list_streamers()`, `list_streams(p_streamer)`,
-  `leaderboard(p_streamer, p_period, p_stream_id, p_limit)`.
+  `leaderboard(p_streamer, p_period, p_stream_id, p_limit)`, `collector_status()` (online = heartbeat < 2 min).
 - Zabezpečení: RLS zapnuté bez politik → anon tabulky přímo nečte ani nezapisuje (ověřeno). Advisor hlásí
   „SECURITY DEFINER executable by anon“ – je to záměr.
 - `service_role` potřebuje explicitní granty (tento projekt je nepřiděluje automaticky).
-- Migrace: `init_gift_leaderboard`, `gifts_msg_id_dedup`, `grant_service_role`.
+- Migrace: `init_gift_leaderboard`, `gifts_msg_id_dedup`, `grant_service_role`, `collector_heartbeat`.
 
 ## Logika sběrače (důležité detaily)
 - Dárce se páruje podle `user_id` (interní TikTok ID) → přejmenování účtu nerozbije součty; web ukazuje poslední známý @handle.
@@ -98,6 +100,11 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Změny DB: `apply_migration` přes Supabase MCP **a** stejnou změnu do `supabase/schema.sql` (musí zůstat idempotentní); pak `get_advisors`.
 - Kontrola nasazení webu: Netlify MCP `get-project` → `currentDeploy`, příp. `get-deploy-for-site`.
 - Jakubovy chyby posílá jako screenshot z PowerShellu; log: `Get-Content .\collector.log -Tail 30`.
+
+## Stav sběrače na webu (od 23. 11. 2026)
+- Sběrač: `Store.heartbeat()` každých 30 s (globální množiny `LIVE`, `RECORDING`); chyba se loguje jen jednou, ne každých 30 s.
+- Web: štítky v hlavičce (`#collectors`) – zelený „online · čeká na LIVE / sbírá LIVE / ⏺ nahrává“, červený „offline · před X“.
+  Při chybě RPC se štítky jen schovají, žebříček běží dál. Sběrače starší než 30 dní se nezobrazují.
 
 ## Nahrávání videa (od 23. 11. 2026)
 - `RECORD=1` v `collector/.env` → třída `Recorder` v `tracker.py` po `ConnectEvent` načte `client.web.fetch_room_info()`,
