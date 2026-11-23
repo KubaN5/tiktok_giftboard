@@ -46,10 +46,11 @@
   .rank { width:42px; font-weight:700; color:var(--muted); }
   tr:nth-child(1) .rank { color:#ffd54a; } tr:nth-child(2) .rank { color:#c9d1d9; } tr:nth-child(3) .rank { color:#d39a62; }
   .nick { color:var(--muted); font-size:13px; }
+  .czk { display:block; white-space:nowrap; color:var(--muted); font-size:12px; font-weight:400; }
   .barfill { height:4px; background:linear-gradient(90deg,var(--acc),var(--acc2)); border-radius:2px; margin-top:4px; }
   .live { display:inline-block; background:var(--acc); color:#fff; font-size:11px; font-weight:700; padding:2px 6px; border-radius:4px; margin-left:6px; }
   .empty { color:var(--muted); padding:30px; text-align:center; }
-  @media (max-width:560px) { .hide-sm { display:none; } .stat { min-width:0; flex:1; padding:8px 10px; } .stat b { font-size:17px; } th, td { padding:9px 8px; } header, main { padding-left:12px; padding-right:12px; } }
+  @media (max-width:560px) { .hide-sm { display:none; } .stats { display:grid; grid-template-columns:1fr 1fr; } .stat { min-width:0; padding:8px 10px; } .stat b { white-space:nowrap; } .stat b { font-size:17px; } th, td { padding:9px 8px; } header, main { padding-left:12px; padding-right:12px; } }
   footer { color:var(--muted); font-size:12px; text-align:center; }
 </style>
 </head>
@@ -76,6 +77,7 @@
 <main>
   <div class="stats">
     <div class="stat"><small>Diamanty</small><b id="s-d">0</b></div>
+    <div class="stat" title="Odhad: tvůrce dostane zhruba polovinu ceny daru (~0,005 USD za minci), před daní a poplatky"><small>Výdělek ≈</small><b id="s-k">0 Kč</b></div>
     <div class="stat"><small>Dárců</small><b id="s-u">0</b></div>
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
   </div>
@@ -83,7 +85,7 @@
     <thead><tr><th class="rank">#</th><th>Účet</th><th class="n">💎</th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Načítám…</td></tr></tbody>
   </table>
-  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. 💎 = hodnota daru v mincích/diamantech podle TikToku.</p></footer>
+  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. 💎 = cena daru v mincích. Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p></footer>
 </main>
 <script src="config.js"></script>
 <script>
@@ -91,6 +93,13 @@ const $ = s => document.querySelector(s);
 const CFG = window.APP_CONFIG || {};
 let period = "all", streamId = "";
 const fmt = n => Number(n || 0).toLocaleString("cs-CZ");
+// Odhad výdělku tvůrce: ~0,005 USD za minci (TikTok si nechá zhruba polovinu ceny daru).
+// Neoficiální průměr – u darů z iPhonu je skutečnost nižší; nezahrnuje daně a podíl agentury.
+const USD_PER_COIN = 0.005;
+let czkPerUsd = 22.35;   // záložní kurz (23. 11. 2026); aktuální se načte níže
+fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=CZK")
+  .then(r => r.ok ? r.json() : null).then(j => { if (j?.rates?.CZK) czkPerUsd = j.rates.CZK; }).catch(() => {});
+const czk = coins => Math.round(Number(coins || 0) * USD_PER_COIN * czkPerUsd).toLocaleString("cs-CZ") + " Kč";
 const ts = t => new Date(t).getTime() / 1000;
 const ago = t => {
   if (!t) return "";
@@ -161,10 +170,12 @@ async function refresh() {
     const live = streams.some(x => !x.ended_at);
     $("#who").innerHTML = "@" + esc(s) + (live ? '<span class="live">LIVE</span>' : "");
     const rows = await rpc("leaderboard", {
-      p_streamer: s, p_period: period, p_stream_id: streamId ? Number(streamId) : null, p_limit: 100
+      p_streamer: s, p_period: period, p_stream_id: streamId ? Number(streamId) : null, p_limit: 500
     });
     const max = rows[0]?.diamonds || 1;
-    $("#s-d").textContent = fmt(rows.reduce((a, r) => a + Number(r.diamonds), 0));
+    const total = rows.reduce((a, r) => a + Number(r.diamonds), 0);
+    $("#s-d").textContent = fmt(total);
+    $("#s-k").textContent = czk(total);
     $("#s-u").textContent = fmt(rows.length);
     $("#s-s").textContent = fmt(streamId || period === "last" ? Math.min(1, streams.length) : streams.length);
     $("#rows").innerHTML = rows.length ? rows.map(r => `
@@ -172,7 +183,7 @@ async function refresh() {
         <td class="rank">${r.rank}</td>
         <td>@${esc(r.unique_id || r.user_id)} <span class="nick">${esc(r.nickname)}</span>
             <div class="barfill" style="width:${Math.max(2, 100*r.diamonds/max)}%"></div></td>
-        <td class="n"><b>${fmt(r.diamonds)}</b></td>
+        <td class="n"><b>${fmt(r.diamonds)}</b><span class="czk">≈ ${czk(r.diamonds)}</span></td>
         <td class="n">${fmt(r.gifts)}</td>
         <td class="n hide-sm">${r.streams}</td>
         <td class="n">${ago(r.last_ts)}</td>

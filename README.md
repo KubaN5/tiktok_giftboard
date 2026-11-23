@@ -90,5 +90,7 @@ nebo **offline** s časem poslední zprávy (po 2 min bez zprávy). Jméno sběr
 - Dárci se párují podle interního TikTok ID → přejmenování účtu nerozbije součty.
 - Série darů (např. Rose ×10) se započítá jednou, až na konci série.
 - Výpadek Supabase nevadí: dary se drží ve frontě a odešlou se, jakmile je spojení zpět.
-- 💎 = cena daru v mincích podle TikToku (tvůrce z ní reálně dostane zhruba polovinu).
+- 💎 = cena daru v mincích podle TikToku. **Kč** = odhad výdělku tvůrce: ~0,005 USD za minci (TikTok si nechá zhruba
+  polovinu), přepočteno aktuálním kurzem (frankfurter.dev, záložně 22,35). Neoficiální průměr, před daní a poplatky;
+  dary z iPhonu vynesou méně. Konstanta `USD_PER_COIN` ve `web/index.html`.
 - Web je veřejný na své URL (vyhledávačům je indexace zakázaná přes `X-Robots-Tag`).

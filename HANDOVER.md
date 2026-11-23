@@ -101,6 +101,11 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Kontrola nasazení webu: Netlify MCP `get-project` → `currentDeploy`, příp. `get-deploy-for-site`.
 - Jakubovy chyby posílá jako screenshot z PowerShellu; log: `Get-Content .\collector.log -Tail 30`.
 
+## Odhad výdělku v Kč (od 23. 11. 2026)
+- Jen web: `USD_PER_COIN = 0.005` × kurz USD/CZK (`api.frankfurter.dev`, záložně 22,35) – dlaždice „Výdělek ≈“
+  a „≈ X Kč“ pod diamanty u každého dárce. `diamonds` v DB = cena daru v mincích (`gift.diamond_count`).
+- Žebříček teď načítá až 500 dárců (`p_limit: 500`), aby součty diamantů/Kč nebyly useknuté na top 100.
+
 ## Stav sběrače na webu (od 23. 11. 2026)
 - Sběrač: `Store.heartbeat()` každých 30 s (globální množiny `LIVE`, `RECORDING`); chyba se loguje jen jednou, ne každých 30 s.
 - Web: štítky v hlavičce (`#collectors`) – zelený „online · čeká na LIVE / sbírá LIVE / ⏺ nahrává“, červený „offline · před X“.
