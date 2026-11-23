@@ -1,0 +1,17 @@
+# /etc/systemd/system/tiktok-collector.service
+# sudo systemctl daemon-reload && sudo systemctl enable --now tiktok-collector
+[Unit]
+Description=TikTok LIVE gift collector -> Supabase
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tiktok
+WorkingDirectory=/opt/tiktok-gift-board/collector
+EnvironmentFile=/opt/tiktok-gift-board/collector/.env
+ExecStart=/opt/tiktok-gift-board/collector/.venv/bin/python tracker.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
