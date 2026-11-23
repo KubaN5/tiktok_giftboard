@@ -286,18 +286,6 @@ begin
     return cnt;
 end $$;
 
--- Uzavře všechna „visící“ vysílání účtu (sběrač volá, když zjistí, že účet nevysílá – např. po výpadku sítě).
-create or replace function public.collector_close_streamer(p_token text, p_streamer text)
-returns integer
-language plpgsql volatile security definer set search_path = public as $$
-declare s text := lower(ltrim(p_streamer, '@')); cnt integer;
-begin
-    perform _collector_auth(p_token, s);
-    update streams set ended_at = now() where streamer = s and ended_at is null;
-    get diagnostics cnt = row_count;
-    return cnt;
-end $$;
-
 -- Správa tokenů – jen pro vlastníka (SQL Editor / secret klíč), ne pro web ani cizí sběrač.
 create or replace function public.create_collector_token(p_name text, p_streamers text[] default null)
 returns text
@@ -337,7 +325,6 @@ revoke all on function public.collector_close_stream(text, bigint)              
 revoke all on function public.collector_heartbeat(text, timestamptz, text[], text[], text[], boolean)
                                                                                   from public, anon, authenticated;
 revoke all on function public.collector_add_gifts(text, jsonb)                   from public, anon, authenticated;
-revoke all on function public.collector_close_streamer(text, text)               from public, anon, authenticated;
 revoke all on function public.create_collector_token(text, text[])               from public, anon, authenticated;
 revoke all on function public.revoke_collector_token(text)                       from public, anon, authenticated;
 grant execute on function public.collector_register(text, text[])                to anon;
@@ -345,4 +332,157 @@ grant execute on function public.collector_open_stream(text, text, text)        
 grant execute on function public.collector_close_stream(text, bigint)            to anon;
 grant execute on function public.collector_heartbeat(text, timestamptz, text[], text[], text[], boolean) to anon;
 grant execute on function public.collector_add_gifts(text, jsonb)                to anon;
-grant execute on function public.collector_close_streamer(text, text)            to anon;
+
+-- ---------------------------------------------------------------- výpadky sběru
+-- Každý heartbeat sběrače (á 30 s) s účtem v poli `live` prodlouží úsek pokrytí; když heartbeat > 90 s chybí
+-- (pád PC, výpadek sítě, odpojení od LIVE), začne nový úsek. Výpadek = čas vysílání, který žádný úsek nepokrývá.
+create table if not exists public.coverage (
+    id          bigint generated always as identity primary key,
+    collector   text        not null,
+    streamer    text        not null,
+    stream_id   bigint      references public.streams(id) on delete cascade,
+    started_at  timestamptz not null default now(),
+    last_seen   timestamptz not null default now()
+);
+create index if not exists ix_coverage_stream on public.coverage (stream_id, started_at);
+alter table public.coverage enable row level security;
+
+alter table public.streams add column if not exists room_started_at timestamptz;          -- skutečný začátek dle TikToku
+alter table public.streams add column if not exists end_uncertain boolean not null default false;  -- konec dopočten dodatečně
+
+create or replace function public._track_coverage()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+declare s text; sid bigint; cid bigint;
+begin
+    foreach s in array coalesce(new.live, '{}') loop
+        select id into sid from streams where streamer = s and ended_at is null order by started_at desc limit 1;
+        cid := null;
+        update coverage set last_seen = now()
+        where id = (select id from coverage
+                    where collector = new.name and streamer = s and stream_id is not distinct from sid
+                      and last_seen > now() - interval '90 seconds'
+                    order by last_seen desc limit 1)
+        returning id into cid;
+        if cid is null then
+            insert into coverage(collector, streamer, stream_id) values (new.name, s, sid);
+        end if;
+    end loop;
+    return new;
+end $$;
+drop trigger if exists trg_track_coverage on public.collectors;
+create trigger trg_track_coverage after insert or update on public.collectors
+    for each row execute function public._track_coverage();
+
+-- Uzavře visící vysílání účtu: konec = poslední zachycený okamžik (+15 s), označí se jako nejistý.
+create or replace function public._close_streamer(p_streamer text)
+returns integer
+language plpgsql volatile security definer set search_path = public as $$
+declare cnt integer;
+begin
+    update streams st set
+        ended_at = greatest(st.started_at,
+                            coalesce((select max(c.last_seen) + interval '15 seconds' from coverage c
+                                      where c.stream_id = st.id), now())),
+        end_uncertain = true
+    where st.streamer = lower(ltrim(p_streamer, '@')) and st.ended_at is null;
+    get diagnostics cnt = row_count;
+    return cnt;
+end $$;
+
+create or replace function public.close_streamer(p_streamer text)      -- sběrač vlastníka (secret klíč)
+returns integer language sql volatile security definer set search_path = public as $$
+    select _close_streamer(p_streamer);
+$$;
+
+create or replace function public.collector_close_streamer(p_token text, p_streamer text)
+returns integer
+language plpgsql volatile security definer set search_path = public as $$
+begin
+    perform _collector_auth(p_token, lower(ltrim(p_streamer, '@')));
+    return _close_streamer(p_streamer);
+end $$;
+
+-- Skutečný začátek vysílání (create_time z room info) – jen dřívější než naše připojení a max. 24 h zpět.
+create or replace function public._set_room_start(p_stream_id bigint, p_started_at timestamptz)
+returns void
+language sql volatile security definer set search_path = public as $$
+    update streams set room_started_at = p_started_at
+    where id = p_stream_id and p_started_at <= started_at + interval '1 minute'
+      and p_started_at > started_at - interval '24 hours'
+      and (room_started_at is null or p_started_at < room_started_at);
+$$;
+
+create or replace function public.set_room_start(p_stream_id bigint, p_started_at timestamptz)
+returns void language sql volatile security definer set search_path = public as $$
+    select _set_room_start(p_stream_id, p_started_at);
+$$;
+
+create or replace function public.collector_room_start(p_token text, p_stream_id bigint, p_started_at timestamptz)
+returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare s text;
+begin
+    select streamer into s from streams where id = p_stream_id;
+    if s is null then return; end if;
+    perform _collector_auth(p_token, s);
+    perform _set_room_start(p_stream_id, p_started_at);
+end $$;
+
+-- Pro web: posledních N vysílání s pokrytím a seznamem výpadků (≥ 60 s).
+create or replace function public.stream_coverage(p_streamer text, p_limit int default 20)
+returns table (stream_id bigint, started_at timestamptz, ended_at timestamptz, live boolean, end_uncertain boolean,
+               total_seconds integer, missing_seconds integer, gaps jsonb)
+language sql stable security definer set search_path = public as $$
+    with st as (
+        select s.id, coalesce(least(s.room_started_at, s.started_at), s.started_at) as s0,
+               coalesce(s.ended_at, now()) as s1, s.ended_at, s.end_uncertain
+        from streams s
+        where s.streamer = lower(ltrim(p_streamer, '@'))
+        order by s.started_at desc
+        limit least(greatest(p_limit, 1), 100)
+    ),
+    cv as (       -- úseky pokrytí oříznuté na dobu vysílání (±15 s = polovina intervalu heartbeatu)
+        select c.stream_id, greatest(c.started_at - interval '15 seconds', st.s0) as a,
+               least(c.last_seen + interval '15 seconds', st.s1) as b
+        from coverage c join st on st.id = c.stream_id
+    ),
+    ord as (
+        select stream_id, a, b,
+               max(b) over (partition by stream_id order by a, b rows between unbounded preceding and 1 preceding) as prev_end
+        from cv where b > a
+    ),
+    edges as (select stream_id, min(a) as first_a, max(b) as last_b from ord group by stream_id),
+    g as (
+        select stream_id, prev_end as g0, a as g1 from ord where prev_end is not null and a > prev_end
+        union all
+        select st.id, st.s0, e.first_a from st join edges e on e.stream_id = st.id where e.first_a > st.s0
+        union all
+        select st.id, e.last_b, st.s1 from st join edges e on e.stream_id = st.id where e.last_b < st.s1
+        union all
+        select st.id, st.s0, st.s1 from st where not exists (select 1 from edges e where e.stream_id = st.id)
+    ),
+    big as (select * from g where g1 - g0 >= interval '60 seconds')
+    select st.id, st.s0, st.ended_at, st.ended_at is null, st.end_uncertain,
+           extract(epoch from st.s1 - st.s0)::int,
+           coalesce((select sum(extract(epoch from b.g1 - b.g0))::int from big b where b.stream_id = st.id), 0),
+           coalesce((select jsonb_agg(jsonb_build_object('from', b.g0, 'to', b.g1,
+                                                         'seconds', extract(epoch from b.g1 - b.g0)::int) order by b.g0)
+                     from big b where b.stream_id = st.id), '[]'::jsonb)
+    from st
+    order by st.s0 desc;
+$$;
+
+revoke all on function public._track_coverage()                                   from public, anon, authenticated;
+revoke all on function public._close_streamer(text)                                from public, anon, authenticated;
+revoke all on function public.close_streamer(text)                                 from public, anon, authenticated;
+revoke all on function public.collector_close_streamer(text, text)                 from public, anon, authenticated;
+revoke all on function public._set_room_start(bigint, timestamptz)                 from public, anon, authenticated;
+revoke all on function public.set_room_start(bigint, timestamptz)                  from public, anon, authenticated;
+revoke all on function public.collector_room_start(text, bigint, timestamptz)      from public, anon, authenticated;
+revoke all on function public.stream_coverage(text, int)                           from public, anon, authenticated;
+grant execute on function public.close_streamer(text)                              to service_role;
+grant execute on function public.set_room_start(bigint, timestamptz)               to service_role;
+grant execute on function public.collector_close_streamer(text, text)              to anon;
+grant execute on function public.collector_room_start(text, bigint, timestamptz)   to anon;
+grant execute on function public.stream_coverage(text, int)                        to anon, authenticated;

@@ -126,6 +126,15 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Otestováno jen s ukázkovými daty (skutečné dary + vymyšlené komentáře/bitva). **Komentáře a bitvy z ostrého LIVE zatím
   neověřené** – parsování LinkMic zpráv v TikTokLive 7.0.1 může selhat (viz HashtagNamespace).
 
+## Výpadky sběru (od 23. 11. 2026)
+- Tabulka `coverage(collector, streamer, stream_id, started_at, last_seen)` – plní ji trigger `trg_track_coverage` na
+  `collectors` (každý heartbeat s účtem v `live` prodlouží úsek; > 90 s bez heartbeatu = nový úsek). Funguje pro oba typy sběračů.
+- `streams.room_started_at` (create_time z room info, sběrač po připojení přes `set_room_start` / `collector_room_start`)
+  → vidět i výpadek na začátku; `streams.end_uncertain` + `_close_streamer`: visící vysílání se uzavře k poslednímu
+  zachycenému okamžiku (+15 s). Vlastník: RPC `close_streamer` (service_role), token: `collector_close_streamer`.
+- Web: RPC `stream_coverage(p_streamer, p_limit)` → u každého vysílání `total_seconds`, `missing_seconds`, `gaps`
+  (≥ 60 s); karta „Výpadky sběru“ s časovou osou, ⚠️ ve výběru vysílání a upozornění nad žebříčkem. Migrace `collector_coverage`.
+
 ## Odhad výdělku v Kč (od 23. 11. 2026)
 - Jen web: `USD_PER_COIN = 0.005` × kurz USD/CZK (`api.frankfurter.dev`, záložně 22,35) – dlaždice „Výdělek ≈“
   a „≈ X Kč“ pod diamanty u každého dárce. `diamonds` v DB = cena daru v mincích (`gift.diamond_count`).

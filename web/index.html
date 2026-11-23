@@ -55,6 +55,18 @@
   .empty { color:var(--muted); padding:30px; text-align:center; }
   @media (max-width:560px) { .hide-sm { display:none; } .stats { display:grid; grid-template-columns:1fr 1fr; } .stat { min-width:0; padding:8px 10px; } .stat b { white-space:nowrap; } .stat b { font-size:17px; } th, td { padding:9px 8px; } header, main { padding-left:12px; padding-right:12px; } }
   footer { color:var(--muted); font-size:12px; text-align:center; }
+  .gapnote { display:none; margin:0 0 12px; padding:10px 14px; border-radius:10px; background:#2a1a12; border:1px solid #7a4a1f; color:#ffcf9a; font-size:14px; }
+  .gapnote.show { display:block; }
+  .cov { margin-top:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .cov h2 { margin:0 0 4px; font-size:16px; }
+  .cov .hint { color:var(--muted); font-size:12px; margin-bottom:8px; }
+  .cov .row { padding:9px 0; border-top:1px solid var(--line); }
+  .cov .row:first-of-type { border-top:0; }
+  .cov .head { display:flex; justify-content:space-between; gap:10px; font-size:14px; }
+  .cov .ok { color:#4ade80; } .cov .bad { color:#ff9a6b; }
+  .tl { position:relative; height:8px; border-radius:4px; background:#2f8f5b; margin:6px 0 4px; overflow:hidden; }
+  .tl span { position:absolute; top:0; bottom:0; background:#ff4d4d; min-width:2px; }
+  .cov .gaps { color:var(--muted); font-size:13px; }
 </style>
 </head>
 <body>
@@ -84,10 +96,16 @@
     <div class="stat"><small>Dárců</small><b id="s-u">0</b></div>
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
   </div>
+  <div class="gapnote" id="gapnote"></div>
   <table>
     <thead><tr><th class="rank">#</th><th>Účet</th><th class="n">💎</th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Načítám…</td></tr></tbody>
   </table>
+  <section class="cov" id="cov" hidden>
+    <h2>Výpadky sběru</h2>
+    <div class="hint">Kdy během vysílání sběrač nesbíral (pád PC, výpadek internetu, pozdní spuštění) – dary z té doby chybí. Zelená = sbíralo se, červená = výpadek (od 1 min).</div>
+    <div id="covlist"></div>
+  </section>
   <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. 💎 = cena daru v mincích. Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p></footer>
 </main>
 <script src="config.js"></script>
@@ -136,16 +154,58 @@ async function loadStreamers() {
   if (want && names.includes(want)) sel.value = want;
 }
 
+let coverage = [];   // výpadky sběru po vysíláních (stream_coverage)
+const hm = t => new Date(t).toLocaleTimeString("cs-CZ", {hour:"2-digit", minute:"2-digit"});
+const dur = sec => { const m = Math.round(sec / 60); return m < 60 ? `${m} min` : `${Math.floor(m/60)} h ${m % 60} min`; };
+const gapText = g => `${hm(g.from)}–${hm(g.to)} (${dur(g.seconds)})`;
+
 async function loadStreams() {
   const s = $("#streamer").value; if (!s) return [];
   const list = await rpc("list_streams", { p_streamer: s });
+  try { coverage = await rpc("stream_coverage", { p_streamer: s, p_limit: 30 }); } catch (e) { console.warn(e); coverage = []; }
+  const missing = Object.fromEntries(coverage.map(c => [c.stream_id, c.missing_seconds]));
   const sel = $("#stream"), cur = sel.value;
   sel.innerHTML = '<option value="">— konkrétní vysílání —</option>' + list.map(x => {
     const d = new Date(x.started_at).toLocaleString("cs-CZ", {day:"numeric", month:"numeric", hour:"2-digit", minute:"2-digit"});
-    return `<option value="${x.id}">${d}${x.ended_at ? "" : " 🔴"} · ${fmt(x.diamonds)} 💎</option>`;
+    return `<option value="${x.id}">${d}${x.ended_at ? "" : " 🔴"} · ${fmt(x.diamonds)} 💎${missing[x.id] ? " ⚠️" : ""}</option>`;
   }).join("");
   sel.value = cur;
   return list;
+}
+
+// Přehled výpadků + upozornění nad žebříčkem u vybraného / posledního vysílání
+function renderCoverage(streams) {
+  const box = $("#cov");
+  if (!coverage.length) { box.hidden = true; } else {
+    box.hidden = false;
+    $("#covlist").innerHTML = coverage.slice(0, 10).map(c => {
+      const day = new Date(c.started_at).toLocaleDateString("cs-CZ", {day:"numeric", month:"numeric"});
+      const end = c.live ? '<span class="live">LIVE</span>' : hm(c.ended_at) + (c.end_uncertain ? " (konec nejistý)" : "");
+      const pct = c.total_seconds ? Math.max(0, 100 - 100 * c.missing_seconds / c.total_seconds) : 100;
+      const t0 = new Date(c.started_at).getTime(), span = Math.max(c.total_seconds, 1) * 1000;
+      const marks = (c.gaps || []).map(g => {
+        const l = 100 * (new Date(g.from).getTime() - t0) / span, w = 100 * g.seconds * 1000 / span;
+        return `<span style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%" title="${esc(gapText(g))}"></span>`;
+      }).join("");
+      const state = c.missing_seconds
+        ? `<span class="bad">⚠️ chybí ${dur(c.missing_seconds)} · sebráno ${pct.toFixed(0)} %</span>`
+        : '<span class="ok">✓ bez výpadku</span>';
+      return `<div class="row"><div class="head"><span>${day} ${hm(c.started_at)}–${end} · ${dur(c.total_seconds)}</span>${state}</div>
+        <div class="tl">${marks}</div>
+        ${c.gaps?.length ? `<div class="gaps">Výpadky: ${c.gaps.map(gapText).join(", ")}</div>` : ""}</div>`;
+    }).join("");
+  }
+  const id = streamId ? Number(streamId) : (period === "last" && streams[0] ? streams[0].id : null);
+  const c = id ? coverage.find(x => x.stream_id === id) : null;
+  const note = $("#gapnote");
+  if (c && c.missing_seconds) {
+    note.innerHTML = `⚠️ V tomhle vysílání sběrač nesbíral ${dur(c.missing_seconds)}: ${c.gaps.map(gapText).join(", ")}. Dary z té doby v žebříčku chybí.`;
+    note.classList.add("show");
+  } else if (!id) {
+    const bad = coverage.filter(x => x.missing_seconds).length;
+    note.innerHTML = bad ? `⚠️ U ${bad} z posledních ${coverage.length} vysílání byl výpadek sběru – dary z té doby chybí. Podrobnosti dole.` : "";
+    note.classList.toggle("show", !!bad && period !== "last");
+  } else { note.classList.remove("show"); }
 }
 
 // Stav sběračů (heartbeat každých 30 s; online = zpráva za poslední 2 min)
@@ -170,6 +230,7 @@ async function refresh() {
     if (!s) { showError("Zatím žádný sledovaný účet – spusť sběrač."); return; }
     localStorage.setItem("streamer", s);
     const streams = await loadStreams();
+    renderCoverage(streams);
     const live = streams.some(x => !x.ended_at);
     $("#who").innerHTML = "@" + esc(s) + (live ? '<span class="live">LIVE</span>' : "");
     const rows = await rpc("leaderboard", {

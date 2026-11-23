@@ -125,6 +125,11 @@ Sběrač každých 30 s zapíše do Supabase, že běží. Web pak v hlavičce u
 nebo **offline** s časem poslední zprávy (po 2 min bez zprávy). Jméno sběrače = název PC, jinak `COLLECTOR_NAME` v `.env`
 (hodí se při dvou sběračích, např. `PC` a `Raspberry`).
 
+## Výpadky sběru
+Databáze si z heartbeatů skládá, kdy sběrač vysílání opravdu sbíral. Web pak u každého vysílání ukáže, kolik minut
+chybí a kdy (pád PC, výpadek internetu, pozdní spuštění – začátek vysílání se bere od TikToku), včetně časové osy a
+upozornění nad žebříčkem. Výpadky kratší než 1 min se nezobrazují (heartbeat je á 30 s).
+
 ## Poznámky
 - Zachytí jen vysílání, během kterých sběrač běží.
 - Používá neoficiální knihovnu [TikTokLive](https://github.com/isaackogan/TikTokLive) – TikTok

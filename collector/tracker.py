@@ -127,14 +127,20 @@ class Store:
                         json={"ended_at": now_iso()})
 
     async def close_open_streams(self, streamer: str) -> None:
-        """Uzavře vysílání účtu, která zůstala otevřená (výpadek sítě při konci LIVE, pád/restart PC)."""
+        """Uzavře vysílání účtu, která zůstala otevřená (výpadek sítě při konci LIVE, pád/restart PC).
+        Konec = poslední zachycený okamžik, označený v DB jako nejistý."""
         if self.token:
             await self._rpc("collector_close_streamer", p_streamer=streamer)
-            return
-        await self._req("PATCH", "/streams",
-                        params={"streamer": f"eq.{streamer}", "ended_at": "is.null"},
-                        headers={"Prefer": "return=minimal"},
-                        json={"ended_at": now_iso()})
+        else:
+            await self._req("POST", "/rpc/close_streamer", json={"p_streamer": streamer})
+
+    async def set_room_start(self, stream_id: int, started: float) -> None:
+        """Skutečný začátek vysílání podle TikToku – web pak ukáže i výpadek na začátku (sběrač zapnutý pozdě)."""
+        iso = datetime.fromtimestamp(started, timezone.utc).isoformat()
+        if self.token:
+            await self._rpc("collector_room_start", p_stream_id=stream_id, p_started_at=iso)
+        else:
+            await self._req("POST", "/rpc/set_room_start", json={"p_stream_id": stream_id, "p_started_at": iso})
 
     async def heartbeat(self, name: str, streamers: list[str], record_enabled: bool) -> None:
         """Každých 30 s zapíše do tabulky collectors, že sběrač žije (web ukazuje online/offline)."""
@@ -359,7 +365,9 @@ class Recorder:
             except Exception as ex:
                 log.warning("@%s: kopie událostí do sdílené složky selhala: %s", self.streamer, ex)
         if done and self.cfg.overlay and events.exists():
-            OVERLAY_TASKS.add(asyncio.create_task(render_overlays(self.streamer, done, events, self.cfg)))
+            task = asyncio.create_task(render_overlays(self.streamer, done, events, self.cfg))
+            OVERLAY_TASKS.add(task)
+            task.add_done_callback(OVERLAY_TASKS.discard)
 
     async def _finalize_part(self, part: Path) -> Path | None:
         if not part.exists() or part.stat().st_size < 100_000:
@@ -387,6 +395,7 @@ class Recorder:
 
 
 OVERLAY_TASKS: set[asyncio.Task] = set()
+BACKGROUND: set[asyncio.Task] = set()
 OVERLAY_LOCK = asyncio.Lock()
 BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) if sys.platform == "win32" else 0
 
@@ -459,10 +468,24 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                 await asyncio.sleep(interval)
                 continue
 
+            async def room_start(stream_id: int) -> None:
+                try:
+                    info = await client.web.fetch_room_info() or {}
+                    started = float(info.get("create_time") or info.get("start_time") or 0)
+                    if started > 1e12:                       # ms → s
+                        started /= 1000
+                    if started > 0:
+                        await store.set_room_start(stream_id, started)
+                except Exception as ex:
+                    log.debug("@%s: začátek vysílání se nepodařilo zjistit: %s", streamer, ex)
+
             @client.on(ConnectEvent)
             async def _on_connect(ev: ConnectEvent):
                 state["stream_id"] = await store.open_stream(streamer, str(ev.room_id))
                 LIVE.add(streamer)
+                task = asyncio.create_task(room_start(state["stream_id"]))
+                BACKGROUND.add(task)
+                task.add_done_callback(BACKGROUND.discard)
                 log.info("@%s je LIVE (room %s) – sbírám dary", streamer, ev.room_id)
                 if rec_cfg and state["rec"] is None:
                     state["rec"] = Recorder(streamer, client, rec_cfg, str(ev.room_id))
