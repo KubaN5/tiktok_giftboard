@@ -1,0 +1,7 @@
+# Omezeni verzi pro instalaci (pouziva start.ps1 / start.sh / Dockerfile pres PIP_CONSTRAINT).
+# packaging 26.x pouziva v regexech "possessive" kvantifikatory, ktere nektere buildy Pythonu
+# vyhodnocuji chybne -> "InvalidVersion: Invalid version: '0.dev0'" uz pri startu pipu.
+# pip 26+ a setuptools 81+ maji packaging 26 pribaleny, proto i ty drzime nize.
+pip<26
+setuptools<81
+packaging<26

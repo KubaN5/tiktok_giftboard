@@ -15,6 +15,8 @@ if (-not (Test-Path .venv\Scripts\python.exe)) {
 }
 
 $py = ".\.venv\Scripts\python.exe"
+# Omezeni verzi (viz constraints.txt) - plati i pro docasna build prostredi pipu
+$env:PIP_CONSTRAINT = Join-Path $PSScriptRoot "constraints.txt"
 $pipArgs = @("-m", "pip", "install", "-q", "--disable-pip-version-check")
 
 # 1) aktualni pip/setuptools (pip pribaleny k Pythonu byva starsi)
