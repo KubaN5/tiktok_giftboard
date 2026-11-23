@@ -71,12 +71,17 @@ grant select, insert, update on public.collectors to service_role;
 grant usage, select on all sequences in schema public to service_role;
 
 -- ---------------------------------------------------------------- funkce pro web
+-- Ve výběru jen účty s nějakým vysíláním, nebo hlídané sběračem aktivním za posledních 30 dní
+-- (překlep v STREAMERS po opravě a restartu sběrače sám zmizí).
 create or replace function public.list_streamers()
 returns table (name text, live boolean)
 language sql stable security definer set search_path = public as $$
     select s.name,
            exists (select 1 from streams st where st.streamer = s.name and st.ended_at is null)
     from streamers s
+    where exists (select 1 from streams st where st.streamer = s.name)
+       or exists (select 1 from collectors c where s.name = any (c.streamers)
+                                              and c.last_seen > now() - interval '30 days')
     order by s.name;
 $$;
 
