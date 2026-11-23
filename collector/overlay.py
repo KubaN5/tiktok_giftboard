@@ -44,7 +44,7 @@ TOAST_LANES = 3          # kolik oznámení darů může být vidět najednou
 TOAST_HOLD = 3.0         # s – jak dlouho oznámení zůstane po posledním daru série
 COMBO_GAP = 8.0          # s – pauza, po které se stejný dar počítá jako nová série
 BIG_GIFT = 99            # mincí – od kolika se dar ukáže i velký uprostřed
-COMMENTS = 6             # kolik komentářů je vidět
+COMMENTS = 5             # kolik komentářů je vidět (nejvýš – musí se vejít pod okna bitvy)
 COMMENT_TTL = 45.0       # s – po jaké době komentář zmizí
 RESULT_HOLD = 180.0      # s – jak dlouho po konci bitvy zůstane výsledek (vítězné kolo)
 
@@ -285,7 +285,7 @@ def build_gifts(ass: Ass, gifts: list[dict], vt) -> None:
         ass.add(start, end, "Shape", rf"{{\an7\move({x - 40 + pad},{y + pad},{x + pad},{y + pad},0,180)\p1\bord0\shad0"
                                      rf"\c{col}{fade}}}{rrect(av, av, av / 2)}", 4)
         ass.add(start, end, "Text", rf"{{\an5\move({x - 40 + pad + av // 2},{y + ph // 2},{x + pad + av // 2},{y + ph // 2},0,180)"
-                                    rf"\b1\fs{round(26*u)}{fade}}}{(who[:1] or '?').upper()}", 5)
+                                    rf"\b1\fs{round(26*u)}{fade}}}{initial(who)}", 5)
         tx = x + pad + av + round(10 * u)
         ass.add(start, end, "Text", rf"{{\an1\move({tx - 40},{y + ph // 2 + 1},{tx},{y + ph // 2 + 1},0,180)\b1\fs{fs_name}"
                                     rf"{fade}}}{who}", 5)
@@ -311,24 +311,96 @@ def build_gifts(ass: Ass, gifts: list[dict], vt) -> None:
             ass.add(start, start + 4.0, "Big", text, layer=7)
 
 
-def build_comments(ass: Ass, comments: list[dict], vt, video_len: float) -> None:
+def wrap(text: str, fs: float, max_w: float, max_lines: int = 2) -> list[str]:
+    """Zalomí text podle odhadnuté šířky; co se nevejde, zkrátí se třemi tečkami."""
+    words, lines, cur = text.split(" "), [], ""
+    for wd in words:
+        cand = (cur + " " + wd).strip()
+        if text_w(cand, fs) <= max_w or not cur:
+            cur = cand
+        else:
+            lines.append(cur)
+            cur = wd
+    lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1].rstrip() + "…"
+    out = []
+    for ln in lines:                                   # jedno extrémně dlouhé slovo
+        while text_w(ln, fs) > max_w and len(ln) > 4:
+            ln = ln[:-2].rstrip("…") + "…"
+        out.append(ln)
+    return out
+
+
+def initial(name: str) -> str:
+    return next((ch for ch in name if ch.isalnum()), "?").upper()
+
+
+def build_comments(ass: Ass, comments: list[dict], vt, video_len: float,
+                   layout: tuple[int, int, int, int] | None = None) -> None:
+    """Komentáře jako v aplikaci: bublina s iniciálou, jméno šedě, text bíle; nové přijíždí zespodu."""
     if not comments:
         return
     u, w, h = ass.u, ass.w, ass.h
-    # jemný tmavý přechod dole (jako v aplikaci), ať jsou komentáře čitelné i přes světlý obraz
-    top = round(h * 0.70)
+    # komentáře jen pod okny bitvy (nebo do spodní třetiny), ať nepřekrývají obličeje a dary
+    min_y = max(round(h * 0.60), layout[1] + layout[3] + round(10 * u)) if layout else round(h * 0.62)
+    top = max(min_y - round(30 * u), round(h * 0.55))   # jemný tmavý přechod dole
     for k in range(10):
         y = top + k * (h - top) // 10
         ass.shape(0, video_len + 60, 0, y, rect(w, h - y), "&H000000&", "&HEE&", layer=0)
-    x, y, fs = round(16 * u), round(h * 0.972), round(24 * u)
+
+    fs_n, fs_t, av, pad, gap = round(19 * u), round(23 * u), round(34 * u), round(8 * u), round(6 * u)
+    line_h = round(fs_t * 1.18)
+    max_text_w = w * 0.66
+    x0, bottom = round(12 * u), round(h * 0.975)
+
+    def row(c: dict) -> dict:
+        who = name_of(c)
+        lines = wrap(clean(c.get("text"), 120) or "(emoji)", fs_t, max_text_w)
+        bh = pad + round(fs_n * 1.15) + line_h * len(lines) + pad
+        bw = pad + av + round(9 * u) + 1.08 * max(text_w(who, fs_n, True), max(text_w(l, fs_t) for l in lines)) + pad + round(8 * u)
+        col = AVATAR_COLORS[sum(map(ord, str(c.get("user") or who))) % len(AVATAR_COLORS)]
+        return {"who": who, "lines": lines, "h": bh, "w": bw, "col": col}
+
+    rows = [row(c) for c in comments]
+    alphas = ["&H00&", "&H00&", "&H00&", "&H30&", "&H70&", "&HA0&"]  # nejstarší nahoře blednou
     for i, e in enumerate(comments):
         start = vt(e["t"])
         end = vt(comments[i + 1]["t"]) if i + 1 < len(comments) else start + COMMENT_TTL
         end = min(end, start + COMMENT_TTL)
-        shown = [c for c in comments[max(0, i - COMMENTS + 1): i + 1] if e["t"] - c["t"] <= COMMENT_TTL]
-        lines = [rf"{{\b1\c&HC8C8C8&}}{name_of(c)}{{\b0\c&HFFFFFF&}}  {clean(c.get('text'), 48) or '(emoji)'}"
-                 for c in shown]
-        ass.add(start, end, "Shadowed", rf"{{\an1\pos({x},{y})\fs{fs}}}" + r"\N".join(lines), layer=2)
+        idx = [j for j in range(max(0, i - COMMENTS + 1), i + 1) if e["t"] - comments[j]["t"] <= COMMENT_TTL]
+        shift = rows[i]["h"] + gap                      # o kolik se ostatní posunou nahoru
+        y = bottom
+        for depth, j in enumerate(reversed(idx)):       # odspodu: nejnovější první
+            r = rows[j]
+            if y - r["h"] < min_y:
+                break                                   # nevejde se – starší komentáře už se neukážou
+            y -= r["h"]
+            fa = alphas[min(depth, len(alphas) - 1)]
+            ta = {"&H00&": "&H00&", "&H30&": "&H40&", "&H70&": "&H80&", "&HA0&": "&HB0&"}[fa]
+            if depth == 0:
+                mv = lambda yy: rf"\move({x0},{yy + 20},{x0},{yy},0,180)\fad(150,0)"
+            else:
+                mv = lambda yy, s=shift: rf"\move({x0},{yy + s},{x0},{yy},0,180)"
+            # bublina
+            box_a = "&H50&" if fa == "&H00&" else ("&H78&" if fa == "&H30&" else "&HB0&")   # šedá – vidět i na černé
+            ass.add(start, end, "Shape", rf"{{\an7{mv(y)}\p1\bord0\shad0\c&H2A2A2A&\1a{box_a}}}{rrect(r['w'], r['h'], round(14*u))}", 2)
+            # avatar s iniciálou
+            ay = y + (r["h"] - av) // 2
+            ass.add(start, end, "Shape", rf"{{\an7\move({x0 + pad},{ay + (20 if depth == 0 else shift)},{x0 + pad},{ay},0,180)"
+                                         rf"\p1\bord0\shad0\c{r['col']}\1a{fa}}}{rrect(av, av, av / 2)}", 3)
+            ass.add(start, end, "Text", rf"{{\an5\move({x0 + pad + av // 2},{ay + av // 2 + (20 if depth == 0 else shift)},"
+                                        rf"{x0 + pad + av // 2},{ay + av // 2},0,180)\b1\fs{round(18*u)}\1a{ta}}}"
+                                        rf"{initial(r['who'])}", 4)
+            # jméno a text
+            tx = x0 + pad + av + round(9 * u)
+            dy = 20 if depth == 0 else shift
+            ass.add(start, end, "Text", rf"{{\an7\move({tx},{y + pad + dy},{tx},{y + pad},0,180)\b1\fs{fs_n}\c&HBEBEBE&\1a{ta}}}"
+                                        rf"{r['who']}", 4)
+            ass.add(start, end, "Text", rf"{{\an7\move({tx},{y + pad + round(fs_n*1.15) + dy},{tx},{y + pad + round(fs_n*1.15)},0,180)"
+                                        rf"\fs{fs_t}\1a{ta}}}" + r"\N".join(r["lines"]), 4)
+            y -= gap
 
 
 def our_side(events: list[dict], streamer: str) -> str | None:
@@ -507,7 +579,7 @@ def build_ass(events: list[dict], t0: float, delay: float, w: int, h: int, durat
 
     video_end = t0 + duration if duration else max((e["t"] for e in events), default=t0)
     build_gifts(ass, [e for e in events if e.get("type") == "gift"], vt)
-    build_comments(ass, [e for e in events if e.get("type") == "comment"], vt, vt(video_end))
+    build_comments(ass, [e for e in events if e.get("type") == "comment"], vt, vt(video_end), layout)
     build_battles(ass, parse_battles(events), our_side(events, streamer), vt, video_end, layout)
     return ass.dump()
 
