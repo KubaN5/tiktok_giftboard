@@ -29,7 +29,7 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 | Supabase publishable klíč (veřejný, pro web) | `sb_publishable_sqHEZ6m0Wi-9Ae5vbhlZQQ_aGTFKzvP` |
 | Supabase secret klíč | jen v `collector/.env` na Jakubově PC – **nikdy ho nečíst, nežádat do chatu ani necommitovat** |
 | Netlify | tým `kuba-kuban5` (Free), projekt `tiktok-giftboard`, site id `f65d4943-30a6-4c84-a364-26c68c4243cc` |
-| Web | https://tiktok-giftboard.netlify.app – chráněno přihlášením do Netlify týmu (Visitor access / SSO), `?u=ucet` otevře účet |
+| Web | https://galeriehanby.netlify.app – chráněno přihlášením do Netlify týmu (Visitor access / SSO), `?u=ucet` otevře účet |
 | Netlify env proměnné | `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (scope/context nastavovat nejde – Free plán vrací 403) |
 | Sběrač | Jakubovo Windows PC: `C:\Users\Admin\Documents\tiktok\tiktok_giftboard\collector` |
 | Návod pro Windows | Claude Doc „TikTok Giftboard – nasazení sběrače na Windows“ – https://claude.ai/artifact/Bhh615fNUiohb6xJnQjvJM |

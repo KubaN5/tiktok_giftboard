@@ -29,7 +29,7 @@ Zabezpečení: tabulky mají zapnuté RLS bez politik, takže veřejný klíč j
 Web volá jen tři read-only funkce. Zapisuje pouze sběrač secret klíčem.
 
 ## 2. Netlify
-> Nasazeno: projekt `tiktok-giftboard` → https://tiktok-giftboard.netlify.app (proměnné nastavené).
+> Nasazeno: projekt `galeriehanby` → https://galeriehanby.netlify.app (proměnné nastavené).
 > Web je chráněný přihlášením do Netlify týmu (Visitor access) – vypnutelné v Project configuration → Access & security.
 
 Připoj tohle GitHub repo (Add new site → Import from Git). Build nastavení se načte z `netlify.toml`.
