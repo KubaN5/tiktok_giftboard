@@ -51,6 +51,12 @@ alter table public.streamers enable row level security;
 alter table public.streams   enable row level security;
 alter table public.gifts     enable row level security;
 
+-- Sběrač zapisuje secret klíčem = role service_role. Novější projekty jí práva k tabulkám
+-- nepřidělují automaticky (jinak: "permission denied for table streamers", 403).
+grant usage on schema public to service_role;
+grant select, insert, update on public.streamers, public.streams, public.gifts to service_role;
+grant usage, select on all sequences in schema public to service_role;
+
 -- ---------------------------------------------------------------- funkce pro web
 create or replace function public.list_streamers()
 returns table (name text, live boolean)
