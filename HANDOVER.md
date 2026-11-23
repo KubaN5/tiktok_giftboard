@@ -142,7 +142,10 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 ## Odhad výdělku v Kč (od 23. 11. 2026)
 - Jen web: `USD_PER_COIN = 0.005` × kurz USD/CZK (`api.frankfurter.dev`, záložně 22,35) – dlaždice „Výdělek ≈“
   a „≈ X Kč“ pod mincemi u každého dárce (na webu 🪙 „Mincí“, do 23. 11. ikona 💎). `diamonds` v DB = cena daru v mincích (`gift.diamond_count`).
-- Žebříček teď načítá až 500 dárců (`p_limit: 500`), aby součty diamantů/Kč nebyly useknuté na top 100.
+- Žebříček: web ukazuje po 50 dárcích (tlačítko „Zobrazit dalších 50“, počet rozbalených drží i obnovení po 10 s),
+  pole „Hledat dárce“ volá `leaderboard(..., p_search)` (pořadí zůstává celkové, max 50 výsledků). Součty nahoře
+  (mince, Kč, dárců, max pro šířku pruhu) počítá `leaderboard_totals(p_streamer, p_period, p_stream_id)` ze všech darů.
+  Strop `leaderboard` p_limit 5000. Migrace `leaderboard_search_and_totals` (stará 4parametrová verze dropnutá).
 
 ## Stav sběrače na webu (od 23. 11. 2026)
 - Sběrač: `Store.heartbeat()` každých 30 s (globální množiny `LIVE`, `RECORDING`); chyba se loguje jen jednou, ne každých 30 s.

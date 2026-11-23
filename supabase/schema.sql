@@ -100,11 +100,14 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- p_period: all | 24h | 7d | 30d | last (poslední vysílání); p_stream_id má přednost
+-- p_search: hledání v @handle / přezdívce; pořadí (rank) zůstává celkové, filtruje se až po očíslování
+drop function if exists public.leaderboard(text, text, bigint, int);
 create or replace function public.leaderboard(
     p_streamer  text,
     p_period    text   default 'all',
     p_stream_id bigint default null,
-    p_limit     int    default 100
+    p_limit     int    default 100,
+    p_search    text   default null
 )
 returns table (rank bigint, user_id text, unique_id text, nickname text,
                diamonds bigint, gifts bigint, streams bigint, last_ts timestamptz)
@@ -123,7 +126,8 @@ language sql stable security definer set search_path = public as $$
                    when '24h' then now() - interval '24 hours'
                    when '7d'  then now() - interval '7 days'
                    when '30d' then now() - interval '30 days'
-               end as since
+               end as since,
+               nullif(lower(ltrim(btrim(coalesce(p_search, '')), '@')), '') as q
     ),
     agg as (
         select g.user_id,
@@ -141,13 +145,56 @@ language sql stable security definer set search_path = public as $$
         select distinct on (g.user_id) g.user_id, g.unique_id, g.nickname
         from gifts g join agg a using (user_id)
         order by g.user_id, g.ts desc
+    ),
+    ranked as (
+        select row_number() over (order by a.diamonds desc, a.last_ts) as rank,
+               a.user_id, l.unique_id, l.nickname, a.diamonds, a.gifts, a.streams, a.last_ts
+        from agg a join latest l using (user_id)
     )
-    select row_number() over (order by a.diamonds desc, a.last_ts),
-           a.user_id, l.unique_id, l.nickname,
-           a.diamonds, a.gifts, a.streams, a.last_ts
-    from agg a join latest l using (user_id)
-    order by a.diamonds desc, a.last_ts
-    limit least(greatest(p_limit, 1), 500);
+    select r.* from ranked r, params p
+    where p.q is null
+       or position(p.q in lower(coalesce(r.unique_id, ''))) > 0
+       or position(p.q in lower(coalesce(r.nickname, ''))) > 0
+       or r.user_id = p.q
+    order by r.rank
+    limit least(greatest(p_limit, 1), 5000);
+$$;
+
+-- Součty za období / vysílání ze všech darů (nezávisle na tom, kolik dárců web zobrazuje)
+create or replace function public.leaderboard_totals(
+    p_streamer  text,
+    p_period    text   default 'all',
+    p_stream_id bigint default null
+)
+returns table (diamonds bigint, gifts bigint, donors bigint, top_diamonds bigint)
+language sql stable security definer set search_path = public as $$
+    with params as (
+        select lower(ltrim(p_streamer, '@')) as streamer,
+               coalesce(
+                   p_stream_id,
+                   case when p_period = 'last' then
+                       coalesce((select id from streams
+                                 where streamer = lower(ltrim(p_streamer, '@'))
+                                 order by started_at desc limit 1), -1)
+                   end
+               ) as stream_id,
+               case p_period
+                   when '24h' then now() - interval '24 hours'
+                   when '7d'  then now() - interval '7 days'
+                   when '30d' then now() - interval '30 days'
+               end as since
+    ),
+    per_user as (
+        select g.user_id, sum(g.diamonds)::bigint as diamonds, sum(g.count)::bigint as gifts
+        from gifts g, params p
+        where g.streamer = p.streamer
+          and (p.stream_id is null or g.stream_id = p.stream_id)
+          and (p.stream_id is not null or p.since is null or g.ts >= p.since)
+        group by g.user_id
+    )
+    select coalesce(sum(diamonds), 0)::bigint, coalesce(sum(gifts), 0)::bigint,
+           count(*)::bigint, coalesce(max(diamonds), 0)::bigint
+    from per_user;
 $$;
 
 -- Stav sběračů pro web; online = heartbeat za poslední 2 minuty
@@ -164,11 +211,13 @@ $$;
 
 revoke all on function public.list_streamers()                       from public, anon, authenticated;
 revoke all on function public.list_streams(text)                     from public, anon, authenticated;
-revoke all on function public.leaderboard(text, text, bigint, int)   from public, anon, authenticated;
+revoke all on function public.leaderboard(text, text, bigint, int, text) from public, anon, authenticated;
+revoke all on function public.leaderboard_totals(text, text, bigint) from public, anon, authenticated;
 revoke all on function public.collector_status()                     from public, anon, authenticated;
 grant execute on function public.list_streamers()                     to anon, authenticated;
 grant execute on function public.list_streams(text)                   to anon, authenticated;
-grant execute on function public.leaderboard(text, text, bigint, int) to anon, authenticated;
+grant execute on function public.leaderboard(text, text, bigint, int, text) to anon, authenticated;
+grant execute on function public.leaderboard_totals(text, text, bigint)  to anon, authenticated;
 grant execute on function public.collector_status()                   to anon, authenticated;
 
 -- ---------------------------------------------------------------- sběrače u jiných lidí (tokeny)

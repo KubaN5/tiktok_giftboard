@@ -44,7 +44,7 @@
   td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
   tr:last-child td { border-bottom:0; }
   .rank { width:42px; font-weight:700; color:var(--muted); }
-  tr:nth-child(1) .rank { color:#ffd54a; } tr:nth-child(2) .rank { color:#c9d1d9; } tr:nth-child(3) .rank { color:#d39a62; }
+  .rank.r1 { color:#ffd54a; } .rank.r2 { color:#c9d1d9; } .rank.r3 { color:#d39a62; }
   .nick { color:var(--muted); font-size:13px; }
   a.prof { color:var(--fg); text-decoration:none; border-bottom:1px dotted var(--muted); }
   a.prof:hover, a.prof:active { color:#fff; border-bottom-color:var(--acc); }
@@ -53,6 +53,13 @@
   .barfill { height:4px; background:linear-gradient(90deg,var(--acc),var(--acc2)); border-radius:2px; margin-top:4px; }
   .live { display:inline-block; background:var(--acc); color:#fff; font-size:11px; font-weight:700; padding:2px 6px; border-radius:4px; margin-left:6px; }
   .empty { color:var(--muted); padding:30px; text-align:center; }
+  .search { display:flex; gap:8px; align-items:center; margin:0 0 10px; }
+  .search input { flex:1; min-width:0; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 12px; font:inherit; }
+  .search input:focus { outline:none; border-color:var(--acc); }
+  .search small { color:var(--muted); white-space:nowrap; }
+  .more { display:flex; flex-direction:column; align-items:center; gap:6px; margin:12px 0 0; color:var(--muted); font-size:13px; }
+  .more button { cursor:pointer; padding:9px 16px; }
+  .more button:active { border-color:var(--acc); }
   @media (max-width:560px) { .hide-sm { display:none; } .stats { display:grid; grid-template-columns:1fr 1fr; } .stat { min-width:0; padding:8px 10px; } .stat b { white-space:nowrap; } .stat b { font-size:17px; } th, td { padding:9px 8px; } header, main { padding-left:12px; padding-right:12px; } }
   footer { color:var(--muted); font-size:12px; text-align:center; }
   .gapnote { display:none; margin:0 0 12px; padding:10px 14px; border-radius:10px; background:#2a1a12; border:1px solid #7a4a1f; color:#ffcf9a; font-size:14px; }
@@ -103,10 +110,12 @@
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
   </div>
   <div class="gapnote" id="gapnote"></div>
+  <div class="search"><input id="q" type="search" placeholder="Hledat dárce (jméno nebo @účet)…" autocomplete="off" enterkeyhint="search"><small id="qinfo"></small></div>
   <table>
     <thead><tr><th class="rank">#</th><th>Účet</th><th class="n" title="Mince = cena darů, kterou zaplatili diváci"><i class="coin" aria-hidden="true"></i></th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Načítám…</td></tr></tbody>
   </table>
+  <div class="more" id="more"></div>
   <section class="cov" id="cov">
     <h2>Výpadky sběru</h2>
     <div class="hint">Kdy během vysílání sběrač nesbíral (pád PC, výpadek internetu, pozdní spuštění) – dary z té doby chybí. Řídí se zvoleným obdobím nebo vysíláním. Zelená = sbíralo se, červená = výpadek (od 1 min).</div>
@@ -119,6 +128,8 @@
 const $ = s => document.querySelector(s);
 const CFG = window.APP_CONFIG || {};
 let period = "all", streamId = "";
+const PAGE = 50;          // dárců na stránku
+let shown = PAGE, query = "", seq = 0;
 const fmt = n => Number(n || 0).toLocaleString("cs-CZ");
 // Odhad výdělku tvůrce: ~0,005 USD za minci (TikTok si nechá zhruba polovinu ceny daru).
 // Neoficiální průměr – u darů z iPhonu je skutečnost nižší; nezahrnuje daně a podíl agentury.
@@ -267,18 +278,23 @@ async function refresh() {
     renderCoverage(streams);
     const live = streams.some(x => !x.ended_at);
     $("#who").innerHTML = "@" + esc(s) + (live ? '<span class="live">LIVE</span>' : "");
-    const rows = await rpc("leaderboard", {
-      p_streamer: s, p_period: period, p_stream_id: streamId ? Number(streamId) : null, p_limit: 500
-    });
-    const max = rows[0]?.diamonds || 1;
-    const total = rows.reduce((a, r) => a + Number(r.diamonds), 0);
-    $("#s-d").textContent = fmt(total);
-    $("#s-k").textContent = czk(total);
-    $("#s-u").textContent = fmt(rows.length);
+    const my = ++seq;      // starší odpověď (pomalá síť) nesmí přepsat novější
+    const args = { p_streamer: s, p_period: period, p_stream_id: streamId ? Number(streamId) : null };
+    const [rows, totArr] = await Promise.all([
+      rpc("leaderboard", { ...args, p_limit: query ? PAGE : shown, p_search: query || null }),
+      rpc("leaderboard_totals", args)
+    ]);
+    if (my !== seq) return;
+    const tot = totArr[0] || { diamonds: 0, gifts: 0, donors: 0, top_diamonds: 0 };
+    const max = Number(tot.top_diamonds) || 1, donors = Number(tot.donors);
+    $("#s-d").textContent = fmt(tot.diamonds);
+    $("#s-k").textContent = czk(tot.diamonds);
+    $("#s-u").textContent = fmt(donors);
     $("#s-s").textContent = fmt(streamId || period === "last" ? Math.min(1, streams.length) : streams.length);
+    $("#qinfo").textContent = query ? (rows.length >= PAGE ? `prvních ${PAGE}` : `nalezeno ${rows.length}`) : "";
     $("#rows").innerHTML = rows.length ? rows.map(r => `
       <tr>
-        <td class="rank">${r.rank}</td>
+        <td class="rank${r.rank <= 3 ? " r" + r.rank : ""}">${r.rank}</td>
         <td>${r.unique_id
               ? `<a class="prof" href="https://www.tiktok.com/@${encodeURIComponent(r.unique_id)}" target="_blank" rel="noopener noreferrer" title="Otevřít profil na TikToku">@${esc(r.unique_id)}</a>`
               : `@${esc(r.user_id)}`} <span class="nick">${esc(r.nickname)}</span>
@@ -287,21 +303,38 @@ async function refresh() {
         <td class="n">${fmt(r.gifts)}</td>
         <td class="n hide-sm">${r.streams}</td>
         <td class="n">${ago(r.last_ts)}</td>
-      </tr>`).join("") : '<tr><td colspan="6" class="empty">Zatím žádné dary v tomto období.</td></tr>';
+      </tr>`).join("")
+      : `<tr><td colspan="6" class="empty">${query ? `Nikdo jako „${esc(query)}“ v tomto období nedaroval.` : "Zatím žádné dary v tomto období."}</td></tr>`;
+    const more = $("#more");
+    if (!query && donors > rows.length) {
+      const next = Math.min(PAGE, donors - rows.length);
+      more.innerHTML = `<button id="morebtn">Zobrazit dalších ${next}</button><span>Zobrazeno ${fmt(rows.length)} z ${fmt(donors)} dárců</span>`;
+    } else if (!query && rows.length > PAGE) {
+      more.innerHTML = `<span>Zobrazeno všech ${fmt(rows.length)} dárců</span>`;
+    } else more.innerHTML = "";
   } catch (e) { console.error(e); showError("Nepodařilo se načíst data: " + e.message); }
 }
 
 $("#tabs").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
-  period = b.dataset.p; streamId = ""; $("#stream").value = ""; refresh();
+  period = b.dataset.p; streamId = ""; $("#stream").value = ""; shown = PAGE; refresh();
 });
 $("#stream").addEventListener("change", e => {
-  streamId = e.target.value;
+  streamId = e.target.value; shown = PAGE;
   document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", !streamId && x.dataset.p === period));
   refresh();
 });
-$("#streamer").addEventListener("change", () => { streamId = ""; refresh(); });
+$("#streamer").addEventListener("change", () => { streamId = ""; shown = PAGE; refresh(); });
+$("#more").addEventListener("click", e => {
+  const b = e.target.closest("#morebtn"); if (!b) return;
+  b.disabled = true; b.textContent = "Načítám…"; shown += PAGE; refresh();
+});
+let qTimer;
+$("#q").addEventListener("input", e => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { query = e.target.value.trim(); refresh(); }, 300);
+});
 
 (async () => {
   if (!CFG.supabaseUrl || !CFG.supabaseKey) { showError("Chybí konfigurace Supabase (config.js)."); return; }
