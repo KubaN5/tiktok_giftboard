@@ -172,3 +172,17 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Supabase Realtime místo pollingu každých 10 s.
 - Overlay žebříčku pro OBS (průhledné pozadí, top 5).
 - Export CSV, přepočet diamantů na Kč.
+
+## Top 3 ve vavřínových věncích + profilovky (od 23. 11. 2026)
+- Web: nad „Hledat dárce“ `#podium` – zlatý (uprostřed, výš), stříbrný (vlevo), bronzový (vpravo) věnec
+  (vlastní SVG kresba, funkce `wreath()`), uvnitř profilovka nebo první písmeno @účtu, pod tím @účet, mince, Kč.
+  Řídí se filtrem; při hledání skryté; méně než 3 dárci → jen tolik věnců (pevné `grid-column`).
+  Překresluje se jen při změně (fotky neblikají při obnově po 10 s).
+- Profilovky: sběrač (jen se secret klíčem) u daru vezme `ev.user.avatar_medium/avatar_thumb.url_list[0]`
+  (`avatar_url()`), na pozadí (`Store.avatar_worker`) ji stáhne a nahraje do veřejného bucketu **`avatars`**
+  jako `avatars/<user_id>` (upsert), pak upsert řádku `public.avatars(user_id, updated_at)`.
+  Na dárce nejvýš 1× za 24 h a běh sběrače; neúspěch → další pokus nejdřív za 10 min. Do logu jen první úspěch
+  („Profilovka dárce … uložena“) a první chyba za běh, zbytek v debug. Tokenový sběrač fotky neukládá.
+- `leaderboard` vrací navíc `avatar_ver` (epoch `avatars.updated_at`); web: 
+  `<SUPABASE_URL>/storage/v1/object/public/avatars/<user_id>?v=<avatar_ver>`, při chybě načtení zůstane písmeno.
+- Migrace `donor_avatars` (tabulka, bucket 512 KB, image/*; leaderboard drop + create kvůli novému sloupci).

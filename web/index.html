@@ -53,6 +53,22 @@
   .barfill { height:4px; background:linear-gradient(90deg,var(--acc),var(--acc2)); border-radius:2px; margin-top:4px; }
   .live { display:inline-block; background:var(--acc); color:#fff; font-size:11px; font-weight:700; padding:2px 6px; border-radius:4px; margin-left:6px; }
   .empty { color:var(--muted); padding:30px; text-align:center; }
+  .podium { display:grid; grid-template-columns:1fr 1.15fr 1fr; align-items:end; gap:6px; margin:6px 0 14px; text-align:center; }
+  .podium .p { min-width:0; display:flex; flex-direction:column; align-items:center; }
+  .podium .p { grid-row:1; } .podium .p1 { grid-column:2; transform:translateY(-14px); } .podium .p2 { grid-column:1; } .podium .p3 { grid-column:3; }
+  .podium .wr { position:relative; width:100%; max-width:118px; aspect-ratio:1; }
+  .podium .p1 .wr { max-width:138px; }
+  .podium .wr svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  .podium .av { position:absolute; inset:21%; overflow:hidden; border-radius:50%; display:grid; place-items:center; font-weight:800;
+                font-size:clamp(18px, 6vw, 28px); color:#15161c; z-index:1; box-shadow:0 0 0 3px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.45); }
+  .podium .av img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .podium .num { z-index:2; position:absolute; left:50%; bottom:6%; transform:translateX(-50%); font-size:12px; font-weight:800;
+                 padding:1px 7px; border-radius:999px; color:#15161c; }
+  .podium .nm { margin-top:4px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; font-size:14px; }
+  .podium .nm a { color:var(--fg); text-decoration:none; }
+  .podium .ck { display:flex; align-items:center; gap:4px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .podium .kc { color:var(--muted); font-size:12px; }
+  .podium .p1 .nm { font-size:15px; } .podium .p1 .ck { font-size:18px; }
   .search { display:flex; gap:8px; align-items:center; margin:0 0 10px; }
   .search input { flex:1; min-width:0; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 12px; font:inherit; }
   .search input:focus { outline:none; border-color:var(--acc); }
@@ -110,6 +126,7 @@
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
   </div>
   <div class="gapnote" id="gapnote"></div>
+  <div class="podium" id="podium"></div>
   <div class="search"><input id="q" type="search" placeholder="Hledat dárce (jméno nebo @účet)…" autocomplete="off" enterkeyhint="search"><small id="qinfo"></small></div>
   <table>
     <thead><tr><th class="rank">#</th><th>Účet</th><th class="n" title="Mince = cena darů, kterou zaplatili diváci"><i class="coin" aria-hidden="true"></i></th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
@@ -269,6 +286,49 @@ async function loadCollectors() {
   }).join("");
 }
 
+// Vavřínový věnec (vlastní kresba): listy podél oblouku, vlevo a zrcadlově vpravo
+const MEDAL = {
+  1: { a:"#ffe27a", b:"#d9a514", c:"#8a6400", bg:"linear-gradient(145deg,#fff1a8,#f2c230 55%,#c8920c)" },
+  2: { a:"#f1f4f8", b:"#aeb8c4", c:"#5e6874", bg:"linear-gradient(145deg,#ffffff,#cfd6df 55%,#97a2ae)" },
+  3: { a:"#f3c08f", b:"#c47a3c", c:"#6e3d14", bg:"linear-gradient(145deg,#ffd9b0,#d9945a 55%,#9c5a26)" },
+};
+function wreath(rank) {
+  const m = MEDAL[rank], id = "wg" + rank, cx = 50, cy = 50, r = 39;
+  let leaves = "";
+  for (let i = 0; i < 9; i++) {
+    const a = (108 + i * 17) * Math.PI / 180;                 // od spodku přes levý bok nahoru
+    for (const side of [-1, 1]) {                              // vnější / vnitřní řada
+      const rr = r + side * 3.3, x = cx + rr * Math.cos(a), y = cy + rr * Math.sin(a);
+      const rot = a * 180 / Math.PI + 90 + side * 24;
+      const sz = 1 - i * 0.035;
+      const leaf = `<ellipse cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" rx="${(6.3*sz).toFixed(2)}" ry="${(2.8*sz).toFixed(2)}" transform="rotate(${rot.toFixed(1)} ${x.toFixed(2)} ${y.toFixed(2)})"/>`;
+      leaves += leaf;
+    }
+  }
+  const half = `<g fill="url(#${id})" stroke="${m.c}" stroke-width=".5">${leaves}</g>
+    <path d="M${cx + r*Math.cos(100*Math.PI/180)} ${cy + r*Math.sin(100*Math.PI/180)} A${r} ${r} 0 0 1 ${cx + r*Math.cos(250*Math.PI/180)} ${cy + r*Math.sin(250*Math.PI/180)}" fill="none" stroke="${m.c}" stroke-width="1.2" opacity=".7"/>`;
+  return `<svg viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${m.a}"/><stop offset="1" stop-color="${m.b}"/></linearGradient></defs>
+    ${half}<g transform="translate(100 0) scale(-1 1)">${half}</g>
+    <path d="M42 92 l8 -6 l8 6 l-3 5 l-5 -3 l-5 3 z" fill="${m.b}" stroke="${m.c}" stroke-width=".5"/></svg>`;
+}
+let podiumHtml = "";
+function renderPodium(rows) {
+  const box = $("#podium");
+  const html = query || !rows.length ? "" : rows.slice(0, 3).map(r => {
+    const m = MEDAL[r.rank], name = r.unique_id || r.user_id;
+    const ini = esc(([...(name || "?").replace(/^[^a-z0-9]+/i, "")][0] || "?").toUpperCase());
+    const img = r.avatar_ver ? `<img src="${CFG.supabaseUrl}/storage/v1/object/public/avatars/${encodeURIComponent(r.user_id)}?v=${r.avatar_ver}" alt="" loading="lazy" onerror="this.remove()">` : "";
+    return `<div class="p p${r.rank}">
+      <div class="wr">${wreath(r.rank)}<div class="av" style="background:${m.bg};box-shadow:0 0 0 2.5px ${m.b},0 6px 18px rgba(0,0,0,.45)">${ini}${img}</div>
+        <span class="num" style="background:${m.bg}">${r.rank}.</span></div>
+      <div class="nm">${r.unique_id ? `<a href="https://www.tiktok.com/@${encodeURIComponent(r.unique_id)}" target="_blank" rel="noopener noreferrer">@${esc(name)}</a>` : "@" + esc(name)}</div>
+      <div class="ck"><i class="coin" aria-hidden="true"></i>${fmt(r.diamonds)}</div>
+      <div class="kc">≈ ${czk(r.diamonds)}</div></div>`;
+  }).join("");
+  if (html !== podiumHtml) { box.innerHTML = podiumHtml = html; }   // beze změny nepřekreslovat (fotky neblikají)
+}
+
 async function refresh() {
   try {
     const s = $("#streamer").value;
@@ -305,6 +365,7 @@ async function refresh() {
         <td class="n">${ago(r.last_ts)}</td>
       </tr>`).join("")
       : `<tr><td colspan="6" class="empty">${query ? `Nikdo jako „${esc(query)}“ v tomto období nedaroval.` : "Zatím žádné dary v tomto období."}</td></tr>`;
+    renderPodium(rows);
     const more = $("#more");
     if (!query && donors > rows.length) {
       const next = Math.min(PAGE, donors - rows.length);

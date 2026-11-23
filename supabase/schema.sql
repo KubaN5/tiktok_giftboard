@@ -70,6 +70,22 @@ grant select, insert, update on public.streamers, public.streams, public.gifts t
 grant select, insert, update on public.collectors to service_role;
 grant usage, select on all sequences in schema public to service_role;
 
+-- ---------------------------------------------------------------- profilové fotky dárců
+-- Sběrač (secret klíč) fotku stáhne z TikToku a nahraje do veřejného bucketu avatars jako avatars/<user_id>
+-- (odkazy z TikToku po pár dnech vyprší, uložená kopie ne). Tabulka avatars říká, kdo fotku má a kdy se
+-- naposledy obnovila (web podle toho mění ?v= v adrese, aby prohlížeč nebral starou z cache).
+create table if not exists public.avatars (
+    user_id    text primary key,
+    updated_at timestamptz not null default now()
+);
+alter table public.avatars enable row level security;
+grant select, insert, update on public.avatars to service_role;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('avatars', 'avatars', true, 524288,
+        array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/heic'])
+on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit,
+                               allowed_mime_types = excluded.allowed_mime_types;
+
 -- ---------------------------------------------------------------- funkce pro web
 -- Ve výběru jen účty s nějakým vysíláním, nebo hlídané sběračem aktivním za posledních 30 dní
 -- (překlep v STREAMERS po opravě a restartu sběrače sám zmizí).
@@ -102,6 +118,7 @@ $$;
 -- p_period: all | 24h | 7d | 30d | last (poslední vysílání); p_stream_id má přednost
 -- p_search: hledání v @handle / přezdívce; pořadí (rank) zůstává celkové, filtruje se až po očíslování
 drop function if exists public.leaderboard(text, text, bigint, int);
+drop function if exists public.leaderboard(text, text, bigint, int, text);  -- změna návratových sloupců (avatar_ver)
 create or replace function public.leaderboard(
     p_streamer  text,
     p_period    text   default 'all',
@@ -110,7 +127,7 @@ create or replace function public.leaderboard(
     p_search    text   default null
 )
 returns table (rank bigint, user_id text, unique_id text, nickname text,
-               diamonds bigint, gifts bigint, streams bigint, last_ts timestamptz)
+               diamonds bigint, gifts bigint, streams bigint, last_ts timestamptz, avatar_ver bigint)
 language sql stable security definer set search_path = public as $$
     with params as (
         select lower(ltrim(p_streamer, '@')) as streamer,
@@ -148,8 +165,10 @@ language sql stable security definer set search_path = public as $$
     ),
     ranked as (
         select row_number() over (order by a.diamonds desc, a.last_ts) as rank,
-               a.user_id, l.unique_id, l.nickname, a.diamonds, a.gifts, a.streams, a.last_ts
+               a.user_id, l.unique_id, l.nickname, a.diamonds, a.gifts, a.streams, a.last_ts,
+               extract(epoch from av.updated_at)::bigint as avatar_ver
         from agg a join latest l using (user_id)
+        left join avatars av on av.user_id = a.user_id
     )
     select r.* from ranked r, params p
     where p.q is null
