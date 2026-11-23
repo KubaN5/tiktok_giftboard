@@ -9,6 +9,7 @@ Konfigurace přes proměnné prostředí (nebo soubor .env vedle skriptu):
     SUPABASE_URL          https://xxxx.supabase.co
     SUPABASE_SECRET_KEY   secret (sb_secret_...) nebo legacy service_role klíč
     EULER_API_KEY         volitelné – klíč pro podepisovací server TikTokLive
+    LOG_FILE              volitelné – zapisovat log i do souboru (např. collector.log)
 
 Použití:
     python tracker.py @ucet1 [@ucet2 ...] [--interval 60]
@@ -20,6 +21,7 @@ import argparse
 import asyncio
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -190,7 +192,8 @@ async def watch(streamer: str, store: Store, interval: int) -> None:
 async def run(usernames: list[str], interval: int) -> None:
     url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SECRET_KEY")
     if not url or not key:
-        raise SystemExit("Chybí SUPABASE_URL nebo SUPABASE_SECRET_KEY (viz .env.example).")
+        log.error("Chybí SUPABASE_URL nebo SUPABASE_SECRET_KEY v .env (viz .env.example).")
+        raise SystemExit(1)
     if os.getenv("EULER_API_KEY"):
         from TikTokLive.client.web.web_settings import WebDefaults
         WebDefaults.tiktok_sign_api_key = os.getenv("EULER_API_KEY")
@@ -215,7 +218,16 @@ def main() -> None:
     users = a.usernames or [u for u in os.getenv("STREAMERS", "").split(",") if u.strip()]
     if not users:
         p.error("zadej aspoň jeden účet")
-    logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
+    handlers: list[logging.Handler] = []
+    if sys.stderr is not None:                       # pythonw.exe (běh na pozadí) nemá konzoli
+        handlers.append(logging.StreamHandler())
+    if os.getenv("LOG_FILE"):                        # log do souboru, max 3× 5 MB
+        from logging.handlers import RotatingFileHandler
+        log_path = Path(os.getenv("LOG_FILE"))
+        if not log_path.is_absolute():
+            log_path = Path(__file__).with_name(log_path.name)
+        handlers.append(RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8"))
+    logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, handlers=handlers or None,
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     if not a.verbose:
