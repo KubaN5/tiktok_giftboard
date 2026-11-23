@@ -1,5 +1,7 @@
 -- TikTok LIVE gift leaderboard – schéma pro Supabase (Postgres)
 -- Spusť v Supabase: SQL Editor -> New query -> vložit -> Run. Skript je idempotentní.
+-- Pozn.: advisor hlásí 'SECURITY DEFINER function executable by anon' – je to záměr:
+-- web smí volat jen tyto tři read-only funkce, tabulky samotné veřejně čitelné nejsou.
 
 -- ---------------------------------------------------------------- tabulky
 create table if not exists public.streamers (
@@ -117,9 +119,9 @@ language sql stable security definer set search_path = public as $$
     limit least(greatest(p_limit, 1), 500);
 $$;
 
-revoke all on function public.list_streamers()                       from public;
-revoke all on function public.list_streams(text)                     from public;
-revoke all on function public.leaderboard(text, text, bigint, int)   from public;
+revoke all on function public.list_streamers()                       from public, anon, authenticated;
+revoke all on function public.list_streams(text)                     from public, anon, authenticated;
+revoke all on function public.leaderboard(text, text, bigint, int)   from public, anon, authenticated;
 grant execute on function public.list_streamers()                     to anon, authenticated;
 grant execute on function public.list_streams(text)                   to anon, authenticated;
 grant execute on function public.leaderboard(text, text, bigint, int) to anon, authenticated;

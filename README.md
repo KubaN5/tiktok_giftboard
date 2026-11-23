@@ -17,6 +17,8 @@ ze **všech vysílání** zvoleného účtu a skládá z nich dlouhodobý žebř
 | `collector/` | PC / Raspberry Pi / VPS / Docker | drží WebSocket s LIVE celé hodiny – to serverless (Netlify Functions) neumí |
 
 ## 1. Supabase
+> Nasazeno: projekt `rkyewweuirnnzrfpazbf` (org „Tiktok“, eu-west-1), migrace `init_gift_leaderboard`.
+
 1. Založ projekt, otevři **SQL Editor** a spusť `supabase/schema.sql` (jde spustit opakovaně).
 2. V **Project Settings → API Keys** si poznamenej:
    - **Project URL**
