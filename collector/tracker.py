@@ -7,7 +7,9 @@ Hlídá zadané účty. Jakmile některý začne vysílat, připojí se k LIVE a
 
 Konfigurace přes proměnné prostředí (nebo soubor .env vedle skriptu):
     SUPABASE_URL          https://xxxx.supabase.co
-    SUPABASE_SECRET_KEY   secret (sb_secret_...) nebo legacy service_role klíč
+    SUPABASE_SECRET_KEY   secret (sb_secret_...) nebo legacy service_role klíč – sběrač vlastníka
+    COLLECTOR_TOKEN       místo secret klíče: token od vlastníka (sběrač u někoho jiného) –
+                          pak stačí veřejný SUPABASE_PUBLISHABLE_KEY; zapisuje jen přes funkce collector_*
     EULER_API_KEY         volitelné – klíč pro podepisovací server TikTokLive
     LOG_FILE              volitelné – zapisovat log i do souboru (např. collector.log)
     RECORD                volitelné – 1 = nahrávat video vysílání (potřeba ffmpeg)
@@ -68,9 +70,14 @@ def now_iso() -> str:
 # --------------------------------------------------------------------------
 
 class Store:
-    """Zápisy do Supabase. Dary jdou přes frontu, takže výpadek sítě nic neztratí."""
+    """Zápisy do Supabase. Dary jdou přes frontu, takže výpadek sítě nic neztratí.
 
-    def __init__(self, url: str, key: str):
+    Dva režimy: se secret klíčem zapisuje přímo do tabulek (sběrač vlastníka), s tokenem
+    (COLLECTOR_TOKEN + veřejný klíč) jen přes funkce collector_* – nic nečte, nemění ani nemaže.
+    """
+
+    def __init__(self, url: str, key: str, token: str | None = None):
+        self.token = token
         headers = {"apikey": key, "Content-Type": "application/json"}
         if key.startswith("eyJ"):  # legacy JWT klíč; nové sb_secret_ klíče jdou jen v 'apikey'
             headers["Authorization"] = f"Bearer {key}"
@@ -84,19 +91,33 @@ class Store:
             raise RuntimeError(f"Supabase {r.status_code}: {r.text[:300]}")
         return r
 
-    async def ensure_streamer(self, name: str) -> None:
-        await self._req("POST", "/streamers", params={"on_conflict": "name"},
-                        headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
-                        json={"name": name})
+    async def _rpc(self, fn: str, **args):
+        r = await self._req("POST", f"/rpc/{fn}", json={"p_token": self.token, **args})
+        return r.json() if r.content else None
+
+    async def register(self, streamers: list[str]) -> str | None:
+        """Založí účty pro web. V režimu s tokenem ověří token a vrátí jméno sběrače od vlastníka."""
+        if self.token:
+            return await self._rpc("collector_register", p_streamers=streamers)
+        for name in streamers:
+            await self._req("POST", "/streamers", params={"on_conflict": "name"},
+                            headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+                            json={"name": name})
+        return None
 
     async def open_stream(self, streamer: str, room_id: str) -> int:
         """Založí vysílání; při znovupřipojení do stejné místnosti vrátí existující."""
+        if self.token:
+            return int(await self._rpc("collector_open_stream", p_streamer=streamer, p_room_id=room_id))
         r = await self._req("POST", "/streams", params={"on_conflict": "streamer,room_id", "select": "id"},
                             headers={"Prefer": "resolution=merge-duplicates,return=representation"},
                             json={"streamer": streamer, "room_id": room_id, "ended_at": None})
         return int(r.json()[0]["id"])
 
     async def close_stream(self, stream_id: int) -> None:
+        if self.token:
+            await self._rpc("collector_close_stream", p_stream_id=stream_id)
+            return
         await self._req("PATCH", "/streams",
                         params={"id": f"eq.{stream_id}", "ended_at": "is.null"},
                         headers={"Prefer": "return=minimal"},
@@ -107,11 +128,16 @@ class Store:
         started, failed = now_iso(), False
         while True:
             try:
-                await self._req("POST", "/collectors", params={"on_conflict": "name"},
-                                headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-                                json={"name": name, "started_at": started, "last_seen": now_iso(),
-                                      "streamers": streamers, "live": sorted(LIVE),
-                                      "recording": sorted(RECORDING), "record_enabled": record_enabled})
+                if self.token:                                  # jméno určuje token, ne COLLECTOR_NAME
+                    await self._rpc("collector_heartbeat", p_started_at=started, p_streamers=streamers,
+                                    p_live=sorted(LIVE), p_recording=sorted(RECORDING),
+                                    p_record_enabled=record_enabled)
+                else:
+                    await self._req("POST", "/collectors", params={"on_conflict": "name"},
+                                    headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                                    json={"name": name, "started_at": started, "last_seen": now_iso(),
+                                          "streamers": streamers, "live": sorted(LIVE),
+                                          "recording": sorted(RECORDING), "record_enabled": record_enabled})
                 if failed:
                     log.info("Heartbeat zase funguje")
                 failed = False
@@ -136,9 +162,12 @@ class Store:
             while True:
                 try:
                     # on_conflict=msg_id: stejný dar zapsaný druhým sběračem se tiše přeskočí
-                    await self._req("POST", "/gifts", params={"on_conflict": "msg_id"},
-                                    headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
-                                    json=batch)
+                    if self.token:
+                        await self._rpc("collector_add_gifts", p_gifts=batch)
+                    else:
+                        await self._req("POST", "/gifts", params={"on_conflict": "msg_id"},
+                                        headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+                                        json=batch)
                     break
                 except Exception as ex:
                     log.warning("Zápis %s darů selhal (%s) – zkusím za %ss", len(batch), ex, delay)
@@ -395,10 +424,17 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
 # --------------------------------------------------------------------------
 
 async def run(usernames: list[str], interval: int) -> None:
-    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SECRET_KEY")
-    if not url or not key:
-        log.error("Chybí SUPABASE_URL nebo SUPABASE_SECRET_KEY v .env (viz .env.example).")
-        raise SystemExit(1)
+    url, token = os.getenv("SUPABASE_URL"), (os.getenv("COLLECTOR_TOKEN") or "").strip() or None
+    if token:   # sběrač u někoho jiného: veřejný klíč + token, secret klíč se nepoužije
+        key = os.getenv("SUPABASE_PUBLISHABLE_KEY")
+        if not url or not key:
+            log.error("Chybí SUPABASE_URL nebo SUPABASE_PUBLISHABLE_KEY v .env (viz .env.example).")
+            raise SystemExit(1)
+    else:
+        key = os.getenv("SUPABASE_SECRET_KEY")
+        if not url or not key or key == "sb_secret_...":
+            log.error("Chybí SUPABASE_URL a SUPABASE_SECRET_KEY (nebo COLLECTOR_TOKEN) v .env (viz .env.example).")
+            raise SystemExit(1)
     if os.getenv("EULER_API_KEY"):
         from TikTokLive.client.web.web_settings import WebDefaults
         WebDefaults.tiktok_sign_api_key = os.getenv("EULER_API_KEY")
@@ -407,12 +443,19 @@ async def run(usernames: list[str], interval: int) -> None:
     if rec_cfg:
         log.info("Nahrávání videa zapnuto → %s (kvalita %s)%s", rec_cfg.out_dir, rec_cfg.quality,
                  f", hotová MP4 se přesunou do {rec_cfg.share_dir}" if rec_cfg.share_dir else "")
-    store = Store(url, key)
+    store = Store(url, key, token)
     streamers = [norm(u) for u in usernames]
-    for s in streamers:
-        await store.ensure_streamer(s)
+    try:
+        token_name = await store.register(streamers)
+    except RuntimeError as ex:
+        if token and ("28000" in str(ex) or "42501" in str(ex)):
+            log.error("Token sběrače nefunguje: %s – požádej vlastníka o nový token / povolení účtu.", ex)
+            raise SystemExit(1)
+        raise
+    if token_name:
+        log.info("Přihlášen tokenem jako sběrač „%s“", token_name)
     log.info("Hlídám: %s (kontrola každých %ss)", ", ".join("@" + s for s in streamers), interval)
-    name = (os.getenv("COLLECTOR_NAME") or socket.gethostname() or "sběrač").strip()[:60]
+    name = token_name or (os.getenv("COLLECTOR_NAME") or socket.gethostname() or "sběrač").strip()[:60]
     await asyncio.gather(store.writer(), store.heartbeat(name, streamers, bool(rec_cfg)),
                          *(watch(s, store, interval, rec_cfg) for s in streamers))
 

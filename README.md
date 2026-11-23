@@ -76,6 +76,28 @@ Jak to funguje: během vysílání se zapisuje `.ts` (přehratelný i při pádu
 převede na `.mp4`. Při výpadku spojení se nahrávání naváže dalším dílem (`…_dil2.mp4`). Na dary nemá nahrávání vliv –
 když selže, sběr darů běží dál. Záznamy jsou jen pro vlastní potřebu – video patří autorce vysílání.
 
+## 5. Sběrač u někoho jiného (bez secret klíče)
+Web a databázi hostuješ ty, druhý člověk jen pustí sběrač u sebe. **Secret klíč mu nedávej** – měl by s ním plný
+přístup k databázi. Místo toho dostane vlastní **token**, se kterým umí jen přidávat vysílání a dary k povoleným
+účtům (nic nečte, nemění ani nemaže). Jeho sběrač se na webu ukáže pod jménem, které mu dáš.
+
+1. **Ty** v Supabase → SQL Editor vytvoříš token (zobrazí se jen jednou):
+   ```sql
+   select public.create_collector_token('Petr', array['a_d_e_ll_o_ff_i_c_i_a_l_']);  -- null místo pole = libovolný účet
+   ```
+2. **On** stáhne repo, spustí `collector/start.bat` (vytvoří `.env`) a v `.env` vyplní jen
+   `COLLECTOR_TOKEN=gbc_…` a `STREAMERS=` (povolené účty). `SUPABASE_SECRET_KEY` nechá prázdný / beze změny,
+   `SUPABASE_URL` a veřejný `SUPABASE_PUBLISHABLE_KEY` jsou předvyplněné. V logu uvidí „Přihlášen tokenem jako sběrač …“.
+3. Správa:
+   ```sql
+   select public.revoke_collector_token('Petr');               -- zablokovat (sběrač pak nic nezapíše)
+   select public.create_collector_token('Petr', array['…']);   -- nový token / jiné účty (starý přestane platit)
+   delete from public.gifts where collector = 'Petr';          -- smazat dary, které zapsal
+   select name, streamers, created_at, revoked_at from public.collector_tokens;
+   ```
+
+Sbírá-li stejný účet jako ty, nevadí to – dar se díky `msg_id` započítá jen jednou.
+
 ## Stav sběrače
 Sběrač každých 30 s zapíše do Supabase, že běží. Web pak v hlavičce ukazuje **online** (a jestli sbírá / nahrává LIVE),
 nebo **offline** s časem poslední zprávy (po 2 min bez zprávy). Jméno sběrače = název PC, jinak `COLLECTOR_NAME` v `.env`

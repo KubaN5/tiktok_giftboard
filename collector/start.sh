@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 if [ ! -f .env ]; then
   cp .env.example .env
-  echo "Vytvořen .env – doplň SUPABASE_SECRET_KEY a spusť znovu."; exit 1
+  echo "Vytvořen .env – doplň SUPABASE_SECRET_KEY (nebo COLLECTOR_TOKEN od vlastníka) a spusť znovu."; exit 1
 fi
 [ -x .venv/bin/python ] || python3 -m venv .venv
 export PIP_CONSTRAINT="$PWD/constraints.txt"

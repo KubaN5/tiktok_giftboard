@@ -4,7 +4,7 @@ Set-Location $PSScriptRoot
 
 if (-not (Test-Path .env)) {
     Copy-Item .env.example .env
-    Write-Host "Vytvoren soubor .env - dopln SUPABASE_SECRET_KEY, uloz a spust znovu." -ForegroundColor Yellow
+    Write-Host "Vytvoren soubor .env - dopln SUPABASE_SECRET_KEY (nebo COLLECTOR_TOKEN od vlastnika), uloz a spust znovu." -ForegroundColor Yellow
     notepad .env
     exit 1
 }
