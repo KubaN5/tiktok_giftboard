@@ -123,6 +123,16 @@ class Store:
                         headers={"Prefer": "return=minimal"},
                         json={"ended_at": now_iso()})
 
+    async def close_open_streams(self, streamer: str) -> None:
+        """Uzavře vysílání účtu, která zůstala otevřená (výpadek sítě při konci LIVE, pád/restart PC)."""
+        if self.token:
+            await self._rpc("collector_close_streamer", p_streamer=streamer)
+            return
+        await self._req("PATCH", "/streams",
+                        params={"streamer": f"eq.{streamer}", "ended_at": "is.null"},
+                        headers={"Prefer": "return=minimal"},
+                        json={"ended_at": now_iso()})
+
     async def heartbeat(self, name: str, streamers: list[str], record_enabled: bool) -> None:
         """Každých 30 s zapíše do tabulky collectors, že sběrač žije (web ukazuje online/offline)."""
         started, failed = now_iso(), False
@@ -344,6 +354,7 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
     from TikTokLive import TikTokLiveClient
     from TikTokLive.events import ConnectEvent, DisconnectEvent, GiftEvent, LiveEndEvent
 
+    close_pending = True    # při startu i po každém LIVE: až účet nevysílá, uzavřít visící vysílání v DB
     while True:
         client = TikTokLiveClient(unique_id="@" + streamer)
         # Známá chyba TikTokLive/TikTokLiveProto: zprávy o bitvách (RivalExtra s hashtagem) nejdou přečíst
@@ -366,6 +377,12 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
 
         try:
             if not await client.is_live():
+                if close_pending:
+                    try:
+                        await store.close_open_streams(streamer)
+                        close_pending = False
+                    except Exception as ex:
+                        log.warning("@%s: nepodařilo se uzavřít staré vysílání: %s", streamer, ex)
                 log.debug("@%s nevysílá, další kontrola za %ss", streamer, interval)
                 await asyncio.sleep(interval)
                 continue
@@ -403,6 +420,7 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
             client.add_listener(LiveEndEvent, finish)
             client.add_listener(DisconnectEvent, finish)
 
+            close_pending = True
             await client.connect(fetch_live_check=False)   # blokuje do konce vysílání
             log.info("@%s: spojení ukončeno", streamer)
             await finish()

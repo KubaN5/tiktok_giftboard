@@ -103,14 +103,14 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 
 ## Sběrače u jiných lidí – tokeny (od 23. 11. 2026)
 - Cizí sběrač nemá secret klíč: v `.env` má `COLLECTOR_TOKEN` + veřejný `SUPABASE_PUBLISHABLE_KEY` a zapisuje jen přes RPC
-  `collector_register / collector_open_stream / collector_close_stream / collector_heartbeat / collector_add_gifts`
+  `collector_register / collector_open_stream / collector_close_stream / collector_close_streamer / collector_heartbeat / collector_add_gifts`
   (SECURITY DEFINER, execute jen pro `anon`). Každá ověří token přes `_collector_auth` (není veřejná).
 - Tabulka `collector_tokens(name pk, token_hash sha256, streamers[] null = libovolný, revoked_at)`, RLS bez politik.
   Správa jen jako vlastník: `create_collector_token(name, streamers)` (vrátí token `gbc_…` jen jednou),
   `revoke_collector_token(name)`. Jméno na webu = jméno tokenu (ne `COLLECTOR_NAME`).
 - `gifts.collector` = jméno tokenového sběrače (u sběrače vlastníka `null`) → `delete from gifts where collector = '…'`.
 - `collector_add_gifts`: max 500 v dávce, dar jen k vysílání povoleného účtu, `ts` nesmí být v budoucnu, duplicitní `msg_id` se přeskočí.
-- Migrace `collector_tokens`. Otestováno: lokální Postgres + Supabase (jako `anon`, v transakci s rollbackem) a sběrač
+- Migrace `collector_tokens`, `collector_close_streamer`. Sběrač při startu a po každém LIVE uzavře visící vysílání, jakmile účet nevysílá (výpadek sítě při konci LIVE). Otestováno: lokální Postgres + Supabase (jako `anon`, v transakci s rollbackem) a sběrač
   v režimu s tokenem proti mocku PostgREST. Na skutečném PC u druhého člověka zatím ne.
 
 ## Odhad výdělku v Kč (od 23. 11. 2026)

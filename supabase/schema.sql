@@ -286,6 +286,18 @@ begin
     return cnt;
 end $$;
 
+-- Uzavře všechna „visící“ vysílání účtu (sběrač volá, když zjistí, že účet nevysílá – např. po výpadku sítě).
+create or replace function public.collector_close_streamer(p_token text, p_streamer text)
+returns integer
+language plpgsql volatile security definer set search_path = public as $$
+declare s text := lower(ltrim(p_streamer, '@')); cnt integer;
+begin
+    perform _collector_auth(p_token, s);
+    update streams set ended_at = now() where streamer = s and ended_at is null;
+    get diagnostics cnt = row_count;
+    return cnt;
+end $$;
+
 -- Správa tokenů – jen pro vlastníka (SQL Editor / secret klíč), ne pro web ani cizí sběrač.
 create or replace function public.create_collector_token(p_name text, p_streamers text[] default null)
 returns text
@@ -325,6 +337,7 @@ revoke all on function public.collector_close_stream(text, bigint)              
 revoke all on function public.collector_heartbeat(text, timestamptz, text[], text[], text[], boolean)
                                                                                   from public, anon, authenticated;
 revoke all on function public.collector_add_gifts(text, jsonb)                   from public, anon, authenticated;
+revoke all on function public.collector_close_streamer(text, text)               from public, anon, authenticated;
 revoke all on function public.create_collector_token(text, text[])               from public, anon, authenticated;
 revoke all on function public.revoke_collector_token(text)                       from public, anon, authenticated;
 grant execute on function public.collector_register(text, text[])                to anon;
@@ -332,3 +345,4 @@ grant execute on function public.collector_open_stream(text, text, text)        
 grant execute on function public.collector_close_stream(text, bigint)            to anon;
 grant execute on function public.collector_heartbeat(text, timestamptz, text[], text[], text[], boolean) to anon;
 grant execute on function public.collector_add_gifts(text, jsonb)                to anon;
+grant execute on function public.collector_close_streamer(text, text)            to anon;
