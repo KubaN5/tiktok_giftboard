@@ -101,7 +101,7 @@
     <thead><tr><th class="rank">#</th><th>Účet</th><th class="n">💎</th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Načítám…</td></tr></tbody>
   </table>
-  <section class="cov" id="cov" hidden>
+  <section class="cov" id="cov">
     <h2>Výpadky sběru</h2>
     <div class="hint">Kdy během vysílání sběrač nesbíral (pád PC, výpadek internetu, pozdní spuštění) – dary z té doby chybí. Zelená = sbíralo se, červená = výpadek (od 1 min).</div>
     <div id="covlist"></div>
@@ -175,9 +175,9 @@ async function loadStreams() {
 
 // Přehled výpadků + upozornění nad žebříčkem u vybraného / posledního vysílání
 function renderCoverage(streams) {
-  const box = $("#cov");
-  if (!coverage.length) { box.hidden = true; } else {
-    box.hidden = false;
+  if (!coverage.length) {
+    $("#covlist").innerHTML = '<div class="gaps">Zatím žádné zachycené vysílání. Až sběrač zachytí první LIVE, objeví se tu, jestli se sbíralo celou dobu, nebo kdy vypadl.</div>';
+  } else {
     $("#covlist").innerHTML = coverage.slice(0, 10).map(c => {
       const day = new Date(c.started_at).toLocaleDateString("cs-CZ", {day:"numeric", month:"numeric"});
       const end = c.live ? '<span class="live">LIVE</span>' : hm(c.ended_at) + (c.end_uncertain ? " (konec nejistý)" : "");
