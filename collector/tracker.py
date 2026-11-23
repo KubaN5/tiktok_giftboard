@@ -346,6 +346,10 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
 
     while True:
         client = TikTokLiveClient(unique_id="@" + streamer)
+        # Známá chyba TikTokLive/TikTokLiveProto: zprávy o bitvách (RivalExtra s hashtagem) nejdou přečíst
+        # ('bytes' object has no attribute 'HashtagNamespace'). Dary se netýká → jen do debug logu.
+        if hasattr(client, "parse_error_ignorelist"):
+            client.parse_error_ignorelist.append("HashtagNamespace")
         state: dict = {"stream_id": None, "rec": None}
 
         async def finish(*_):
