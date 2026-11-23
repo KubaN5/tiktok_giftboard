@@ -70,7 +70,10 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 
 ## Aktuální stav
 - [x] Supabase schéma nasazené a otestované (RPC, RLS, dedup, granty service_role).
-- [x] Web nasazený, Netlify propojené s GitHubem → každý push do `main` se nasadí sám.
+- [x] Web nasazený. Hlavička webu: „Galerie hanby – Shopaholic Adel“ (commit `e7e411e`).
+- [ ] **Automatické nasazení z GitHubu nefunguje**: poslední deploy je z commitu `e4372cc` (23. 11. 13:38), novější pushe se
+  nenasadily. Zkontrolovat v Netlify → Project configuration → Build & deploy → Continuous deployment (propojení repa,
+  „Stop builds“, branch `main`), případně Deploys → Trigger deploy. Deploy přes Netlify MCP (`deploy-site`) Claudovi zamítá oprávnění.
 - [x] Sběrač na Windows PC nainstalovaný a spuštěný, spojení se Supabase funguje („Hlídám: …“).
 - [ ] **Neověřeno na skutečném LIVE** – první vysílání účtu ukáže, jestli TikTokLive 7.0.1 a sign server fungují.
 - [ ] Běh na pozadí přes `install-task.ps1` zatím nezaregistrovaný.
