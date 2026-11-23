@@ -67,6 +67,10 @@
   .tl { position:relative; height:8px; border-radius:4px; background:#2f8f5b; margin:6px 0 4px; overflow:hidden; }
   .tl span { position:absolute; top:0; bottom:0; background:#ff4d4d; min-width:2px; }
   .cov .gaps { color:var(--muted); font-size:13px; }
+  /* žlutá mince (vlastní kresba, bez loga TikToku) */
+  .coin { display:inline-block; position:relative; width:1em; height:1em; border-radius:50%; vertical-align:-0.14em;
+          background:radial-gradient(circle at 35% 30%, #fff6b0 0, #ffd84a 40%, #f5b400 100%); box-shadow:inset 0 0 0 .08em #e09a00; }
+  .coin::after { content:""; position:absolute; inset:28%; border-radius:50%; border:.07em solid rgba(176,110,0,.55); }
   .cov .okfold summary { cursor:pointer; font-size:14px; }
   .cov .okfold .row:first-of-type { border-top:1px solid var(--line); margin-top:8px; }
 </style>
@@ -93,14 +97,14 @@
 </header>
 <main>
   <div class="stats">
-    <div class="stat"><small>Mincí</small><b id="s-d">0</b></div>
+    <div class="stat"><small><i class="coin" aria-hidden="true"></i> Mincí</small><b id="s-d">0</b></div>
     <div class="stat" title="Odhad: tvůrce dostane zhruba polovinu ceny daru (~0,005 USD za minci), před daní a poplatky"><small>Výdělek ≈</small><b id="s-k">0 Kč</b></div>
     <div class="stat"><small>Dárců</small><b id="s-u">0</b></div>
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
   </div>
   <div class="gapnote" id="gapnote"></div>
   <table>
-    <thead><tr><th class="rank">#</th><th>Účet</th><th class="n" title="Mince = cena darů, kterou zaplatili diváci">🪙</th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
+    <thead><tr><th class="rank">#</th><th>Účet</th><th class="n" title="Mince = cena darů, kterou zaplatili diváci"><i class="coin" aria-hidden="true"></i></th><th class="n">Darů</th><th class="n hide-sm">Vysílání</th><th class="n">Naposledy</th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Načítám…</td></tr></tbody>
   </table>
   <section class="cov" id="cov">
@@ -108,7 +112,7 @@
     <div class="hint">Kdy během vysílání sběrač nesbíral (pád PC, výpadek internetu, pozdní spuštění) – dary z té doby chybí. Řídí se zvoleným obdobím nebo vysíláním. Zelená = sbíralo se, červená = výpadek (od 1 min).</div>
     <div id="covlist"></div>
   </section>
-  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. 🪙 = mince, cena darů, kterou zaplatili diváci (růže = 1). Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p></footer>
+  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. <i class="coin" aria-hidden="true"></i> = mince, cena darů, kterou zaplatili diváci (růže = 1). Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p></footer>
 </main>
 <script src="config.js"></script>
 <script>
@@ -169,7 +173,7 @@ async function loadStreams() {
   const sel = $("#stream"), cur = sel.value;
   sel.innerHTML = '<option value="">— konkrétní vysílání —</option>' + list.map(x => {
     const d = new Date(x.started_at).toLocaleString("cs-CZ", {day:"numeric", month:"numeric", hour:"2-digit", minute:"2-digit"});
-    return `<option value="${x.id}">${d}${x.ended_at ? "" : " 🔴"} · ${fmt(x.diamonds)} 🪙${missing[x.id] ? " ⚠️" : ""}</option>`;
+    return `<option value="${x.id}">${d}${x.ended_at ? "" : " 🔴"} · ${fmt(x.diamonds)} mincí${missing[x.id] ? " ⚠️" : ""}</option>`;
   }).join("");
   sel.value = cur;
   return list;
