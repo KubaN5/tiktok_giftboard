@@ -10,6 +10,10 @@ Konfigurace přes proměnné prostředí (nebo soubor .env vedle skriptu):
     SUPABASE_SECRET_KEY   secret (sb_secret_...) nebo legacy service_role klíč
     EULER_API_KEY         volitelné – klíč pro podepisovací server TikTokLive
     LOG_FILE              volitelné – zapisovat log i do souboru (např. collector.log)
+    RECORD                volitelné – 1 = nahrávat video vysílání (potřeba ffmpeg)
+    RECORD_DIR            kam ukládat záznamy (výchozí složka recordings vedle skriptu)
+    RECORD_QUALITY        origin | uhd | hd | sd | ld (výchozí origin = nejlepší dostupná)
+    FFMPEG_PATH           volitelné – cesta k ffmpeg, pokud není v PATH
 
 Použití:
     python tracker.py @ucet1 [@ucet2 ...] [--interval 60]
@@ -19,8 +23,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
+import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,18 +122,166 @@ class Store:
 
 
 # --------------------------------------------------------------------------
+# Nahrávání videa (volitelné, RECORD=1)
+# --------------------------------------------------------------------------
+
+QUALITIES = ["origin", "uhd", "hd", "sd", "ld"]
+# Bez CREATE_NO_WINDOW by pythonw.exe (běh na pozadí) otevíral okno konzole pro ffmpeg
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+
+
+class RecordConfig:
+    def __init__(self, ffmpeg: str, out_dir: Path, quality: str):
+        self.ffmpeg, self.out_dir, self.quality = ffmpeg, out_dir, quality
+
+    @classmethod
+    def from_env(cls) -> "RecordConfig | None":
+        if os.getenv("RECORD", "").strip().lower() not in ("1", "true", "yes", "ano"):
+            return None
+        ffmpeg = os.getenv("FFMPEG_PATH") or shutil.which("ffmpeg")
+        if not ffmpeg or not Path(ffmpeg).exists():
+            log.warning("RECORD=1, ale ffmpeg nebyl nalezen (nainstaluj ho, nebo nastav FFMPEG_PATH) – nahrávání vypnuto")
+            return None
+        out = Path(os.getenv("RECORD_DIR") or "recordings")
+        if not out.is_absolute():
+            out = Path(__file__).resolve().parent / out
+        quality = (os.getenv("RECORD_QUALITY") or "origin").strip().lower()
+        if quality not in QUALITIES:
+            quality = "origin"
+        return cls(ffmpeg, out, quality)
+
+
+def pick_stream_url(room_info: dict, quality: str) -> str | None:
+    """Najde FLV adresu streamu v room info; zkouší zvolenou kvalitu a pak horší."""
+    su = room_info.get("stream_url") or {}
+    try:
+        data = json.loads(su["live_core_sdk_data"]["pull_data"]["stream_data"])["data"]
+        order = QUALITIES[QUALITIES.index(quality):] + QUALITIES[:QUALITIES.index(quality)]
+        for q in order:
+            url = ((data.get(q) or {}).get("main") or {}).get("flv")
+            if url:
+                return url
+    except (KeyError, TypeError, ValueError):
+        pass
+    for key in ("FULL_HD1", "HD1", "SD1", "SD2"):          # starší formát odpovědi
+        if (su.get("flv_pull_url") or {}).get(key):
+            return su["flv_pull_url"][key]
+    return su.get("rtmp_pull_url") or None
+
+
+class Recorder:
+    """
+    Nahrává LIVE přes ffmpeg (bez překódování) do .ts – ten zůstane přehratelný i při pádu PC.
+    Když se spojení přeruší a vysílání pořád běží, naváže dalším dílem. Po skončení převede
+    díly na .mp4 (bezztrátově) a .ts smaže.
+    """
+
+    def __init__(self, streamer: str, client, cfg: RecordConfig):
+        self.streamer, self.client, self.cfg = streamer, client, cfg
+        self.proc: asyncio.subprocess.Process | None = None
+        self.stopping = False
+        self.parts: list[Path] = []
+        self.task: asyncio.Task | None = None
+
+    def start(self) -> None:
+        self.task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        folder = self.cfg.out_dir / self.streamer
+        folder.mkdir(parents=True, exist_ok=True)
+        base = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        failures = 0
+        while not self.stopping and failures < 5:
+            try:
+                info = await self.client.web.fetch_room_info()
+            except Exception as ex:
+                log.warning("@%s: nahrávání – nepodařilo se načíst info o vysílání: %s", self.streamer, ex)
+                info = None
+            if info is not None and info.get("status") == 4:           # 4 = vysílání skončilo
+                break
+            url = pick_stream_url(info or {}, self.cfg.quality)
+            if not url:
+                failures += 1
+                await asyncio.sleep(10)
+                continue
+
+            n = len(self.parts) + 1
+            part = folder / (f"{base}.ts" if n == 1 else f"{base}_dil{n}.ts")
+            self.parts.append(part)
+            log.info("@%s: nahrávám video → %s", self.streamer, part)
+            self.proc = await asyncio.create_subprocess_exec(
+                self.cfg.ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error",
+                "-rw_timeout", "20000000",                            # 20 s bez dat → ffmpeg skončí
+                "-user_agent", "Mozilla/5.0", "-i", url,
+                "-c", "copy", "-f", "mpegts", "-y", str(part),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
+            tail: collections.deque[str] = collections.deque(maxlen=5)
+            async for line in self.proc.stderr:                     # čte do konce ffmpeg
+                tail.append(line.decode(errors="replace").strip())
+            code = await self.proc.wait()
+            self.proc = None
+            if self.stopping:
+                break
+            size = part.stat().st_size if part.exists() else 0
+            failures = 0 if size > 1_000_000 else failures + 1
+            log.info("@%s: ffmpeg skončil (kód %s, %.1f MB)%s – zkusím navázat", self.streamer, code,
+                     size / 1e6, (": " + " | ".join(tail)) if tail else "")
+            await asyncio.sleep(5)
+        await self._finalize()
+
+    async def stop(self) -> None:
+        """Ukončí nahrávání slušně (klávesa q), aby se soubor korektně uzavřel, a počká na převod."""
+        self.stopping = True
+        proc = self.proc
+        if proc and proc.returncode is None:
+            try:
+                proc.stdin.write(b"q")
+                await proc.stdin.drain()
+                await asyncio.wait_for(proc.wait(), 20)
+            except Exception:
+                proc.kill()
+        if self.task:
+            try:
+                await asyncio.wait_for(asyncio.shield(self.task), 600)
+            except Exception as ex:
+                log.warning("@%s: dokončení nahrávky selhalo: %s", self.streamer, ex)
+
+    async def _finalize(self) -> None:
+        for part in self.parts:
+            if not part.exists() or part.stat().st_size < 100_000:
+                part.unlink(missing_ok=True)
+                continue
+            mp4 = part.with_suffix(".mp4")
+            proc = await asyncio.create_subprocess_exec(
+                self.cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(part),
+                "-c", "copy", "-movflags", "+faststart", str(mp4),
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL, creationflags=NO_WINDOW)
+            if await proc.wait() == 0 and mp4.exists() and mp4.stat().st_size > 0:
+                part.unlink(missing_ok=True)
+                log.info("@%s: záznam uložen: %s (%.1f MB)", self.streamer, mp4, mp4.stat().st_size / 1e6)
+            else:
+                mp4.unlink(missing_ok=True)
+                log.warning("@%s: převod na MP4 se nepovedl, záznam zůstává jako %s", self.streamer, part)
+
+
+# --------------------------------------------------------------------------
 # Hlídání LIVE
 # --------------------------------------------------------------------------
 
-async def watch(streamer: str, store: Store, interval: int) -> None:
+async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfig | None = None) -> None:
     from TikTokLive import TikTokLiveClient
     from TikTokLive.events import ConnectEvent, DisconnectEvent, GiftEvent, LiveEndEvent
 
     while True:
         client = TikTokLiveClient(unique_id="@" + streamer)
-        state: dict = {"stream_id": None}
+        state: dict = {"stream_id": None, "rec": None}
 
         async def finish(*_):
+            rec, state["rec"] = state["rec"], None
+            if rec is not None:
+                await rec.stop()
             sid, state["stream_id"] = state["stream_id"], None
             if sid is not None:
                 try:
@@ -143,6 +299,9 @@ async def watch(streamer: str, store: Store, interval: int) -> None:
             async def _on_connect(ev: ConnectEvent):
                 state["stream_id"] = await store.open_stream(streamer, str(ev.room_id))
                 log.info("@%s je LIVE (room %s) – sbírám dary", streamer, ev.room_id)
+                if rec_cfg and state["rec"] is None:
+                    state["rec"] = Recorder(streamer, client, rec_cfg)
+                    state["rec"].start()
 
             @client.on(GiftEvent)
             async def _on_gift(ev: GiftEvent):
@@ -173,6 +332,9 @@ async def watch(streamer: str, store: Store, interval: int) -> None:
             await finish()
             await asyncio.sleep(10)
         except asyncio.CancelledError:
+            rec = state["rec"]
+            if rec is not None and rec.proc is not None and rec.proc.returncode is None:
+                rec.proc.terminate()                 # .ts zůstane přehratelný i bez dokončení
             raise
         except Exception as ex:  # TikTok občas změní API / sign server odmítne požadavek
             log.warning("@%s: %s: %s – zkusím znovu za %ss",
@@ -198,12 +360,15 @@ async def run(usernames: list[str], interval: int) -> None:
         from TikTokLive.client.web.web_settings import WebDefaults
         WebDefaults.tiktok_sign_api_key = os.getenv("EULER_API_KEY")
 
+    rec_cfg = RecordConfig.from_env()
+    if rec_cfg:
+        log.info("Nahrávání videa zapnuto → %s (kvalita %s)", rec_cfg.out_dir, rec_cfg.quality)
     store = Store(url, key)
     streamers = [norm(u) for u in usernames]
     for s in streamers:
         await store.ensure_streamer(s)
     log.info("Hlídám: %s (kontrola každých %ss)", ", ".join("@" + s for s in streamers), interval)
-    await asyncio.gather(store.writer(), *(watch(s, store, interval) for s in streamers))
+    await asyncio.gather(store.writer(), *(watch(s, store, interval, rec_cfg) for s in streamers))
 
 
 def main() -> None:

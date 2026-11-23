@@ -4,6 +4,12 @@ services:
     build: .
     env_file: .env
     restart: unless-stopped
+    # Nahrávání videa (RECORD=1 v .env): záznamy půjdou do ./recordings na Raspberry
+    # jednorázově:  mkdir -p recordings && sudo chown 10001 recordings
+    environment:
+      RECORD_DIR: /recordings
+    volumes:
+      - ./recordings:/recordings
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }

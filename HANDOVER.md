@@ -38,7 +38,7 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 | Cesta | Obsah |
 |---|---|
 | `supabase/schema.sql` | celé schéma, idempotentní (tabulky, RLS, granty, RPC funkce) |
-| `collector/tracker.py` | sběrač: hlídání LIVE, zápis darů do Supabase přes frontu s retry |
+| `collector/tracker.py` | sběrač: hlídání LIVE, zápis darů do Supabase přes frontu s retry, volitelné nahrávání videa |
 | `collector/start.bat` + `start.ps1` | Windows: založí `.venv`, nainstaluje závislosti, spustí |
 | `collector/install-task.ps1` | Windows Plánovač úloh (po přihlášení, `pythonw.exe`, restart při pádu); `-Remove` odebere |
 | `collector/start.sh`, `Dockerfile`, `docker-compose.yml`, `tiktok-collector.service` | Raspberry Pi / Linux |
@@ -98,6 +98,17 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Změny DB: `apply_migration` přes Supabase MCP **a** stejnou změnu do `supabase/schema.sql` (musí zůstat idempotentní); pak `get_advisors`.
 - Kontrola nasazení webu: Netlify MCP `get-project` → `currentDeploy`, příp. `get-deploy-for-site`.
 - Jakubovy chyby posílá jako screenshot z PowerShellu; log: `Get-Content .\collector.log -Tail 30`.
+
+## Nahrávání videa (od 23. 11. 2026)
+- `RECORD=1` v `collector/.env` → třída `Recorder` v `tracker.py` po `ConnectEvent` načte `client.web.fetch_room_info()`,
+  vybere FLV URL podle `RECORD_QUALITY` a spustí **vlastní ffmpeg subprocess** (`-c copy -f mpegts` → `.ts`).
+- Vestavěný `client.web.fetch_video_data` z TikTokLive záměrně nepoužitý: zastavuje ffmpeg přes `os.kill(SIGTERM)`,
+  což na Windows = TerminateProcess → poškozené MP4. Tady se ffmpeg ukončí klávesou `q` přes stdin.
+- Výpadek → nový díl `…_dilN.ts` (max 5 neúspěchů po sobě); `room_info.status == 4` = konec vysílání.
+- Po konci: remux každého dílu na `.mp4` (`-movflags +faststart`), `.ts` se smaže; když remux selže, `.ts` zůstane.
+- Windows: `CREATE_NO_WINDOW`, jinak by `pythonw.exe` (Plánovač úloh) otevíral okno konzole.
+- Otestováno v workspace se simulovaným FLV streamem (nahrání, stop, výpadek + navázání, konec). Na skutečném LIVE zatím ne.
+- Docker: ffmpeg v image, záznamy do volume `./recordings` (uid 10001).
 
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.

@@ -59,6 +59,21 @@ docker compose logs -f                     # logy
 Překryv nevadí – každý dar má TikTok `msg_id` s unikátním klíčem v DB, takže se nezapočítá dvakrát.
 Na Raspberry stačí 64bit Raspberry Pi OS (image `python:3.12-slim` je i pro ARM).
 
+## 4. Nahrávání videa (volitelné)
+Sběrač umí každé zachycené vysílání uložit jako video. Stačí mít **ffmpeg** a v `collector/.env` nastavit `RECORD=1`.
+
+- **Windows:** `winget install ffmpeg`, pak zavři a znovu otevři PowerShell (kvůli PATH) a restartuj sběrač.
+  Když ffmpeg nenajde, nastav `FFMPEG_PATH=C:\cesta\k\ffmpeg.exe`.
+- **Raspberry (Docker):** ffmpeg je v image; jednorázově `mkdir -p recordings && sudo chown 10001 recordings`.
+
+Záznamy se ukládají do `collector/recordings/<účet>/RRRR-MM-DD_HH-MM.mp4` (jiná složka: `RECORD_DIR`).
+Kvalita `RECORD_QUALITY`: `origin` (nejlepší, výchozí), `uhd` 720p, `hd` 540p, `sd`/`ld` 480p.
+Video se nepřekódovává (nezatěžuje procesor); hodina má zhruba 0,5–2 GB.
+
+Jak to funguje: během vysílání se zapisuje `.ts` (přehratelný i při pádu PC, např. ve VLC); po konci se bezztrátově
+převede na `.mp4`. Při výpadku spojení se nahrávání naváže dalším dílem (`…_dil2.mp4`). Na dary nemá nahrávání vliv –
+když selže, sběr darů běží dál. Záznamy jsou jen pro vlastní potřebu – video patří autorce vysílání.
+
 ## Poznámky
 - Zachytí jen vysílání, během kterých sběrač běží.
 - Používá neoficiální knihovnu [TikTokLive](https://github.com/isaackogan/TikTokLive) – TikTok

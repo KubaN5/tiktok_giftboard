@@ -4,5 +4,8 @@
 web/config.js
 __pycache__/
 .venv/
+collector/recordings/
+*.ts
+*.mp4
 *.db
 .DS_Store
