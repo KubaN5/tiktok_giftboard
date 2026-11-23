@@ -100,7 +100,10 @@ class Store:
             delay = 2
             while True:
                 try:
-                    await self._req("POST", "/gifts", headers={"Prefer": "return=minimal"}, json=batch)
+                    # on_conflict=msg_id: stejný dar zapsaný druhým sběračem se tiše přeskočí
+                    await self._req("POST", "/gifts", params={"on_conflict": "msg_id"},
+                                    headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+                                    json=batch)
                     break
                 except Exception as ex:
                     log.warning("Zápis %s darů selhal (%s) – zkusím za %ss", len(batch), ex, delay)
@@ -148,12 +151,14 @@ async def watch(streamer: str, store: Store, interval: int) -> None:
                 if ev.streaking:
                     return
                 count = max(int(ev.repeat_count or 1), 1)
+                msg_id = getattr(ev.common, "msg_id", 0) if ev.common else 0
                 diamonds = count * int(ev.gift.diamond_count or 0)
                 store.add_gift({
                     "stream_id": state["stream_id"], "streamer": streamer,
                     "user_id": str(ev.user.id), "unique_id": ev.user.unique_id,
                     "nickname": ev.user.nickname, "gift_id": ev.gift.id,
                     "gift_name": ev.gift.name, "count": count, "diamonds": diamonds,
+                    "msg_id": str(msg_id) if msg_id else None,
                 })
                 log.info("@%s ← %s: %sx %s (%s 💎)", streamer, ev.user.unique_id,
                          count, ev.gift.name, diamonds)

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Spuštění sběrače na Linuxu / Raspberry Pi bez Dockeru: ./start.sh
+set -euo pipefail
+cd "$(dirname "$0")"
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "Vytvořen .env – doplň SUPABASE_SECRET_KEY a spusť znovu."; exit 1
+fi
+[ -x .venv/bin/python ] || python3 -m venv .venv
+.venv/bin/pip install -q --disable-pip-version-check -U -r requirements.txt
+exec .venv/bin/python tracker.py

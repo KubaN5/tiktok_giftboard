@@ -29,8 +29,15 @@ create table if not exists public.gifts (
     gift_id     bigint,
     gift_name   text,
     count       integer     not null,
-    diamonds    integer     not null
+    diamonds    integer     not null,
+    msg_id      text        unique             -- TikTok msg_id: brání dvojímu započtení při 2 sběračích
 );
+alter table public.gifts add column if not exists msg_id text;  -- pro starší instalace
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'gifts_msg_id_key') then
+    alter table public.gifts add constraint gifts_msg_id_key unique (msg_id);
+  end if;
+end $$;
 
 create index if not exists ix_gifts_streamer_ts on public.gifts (streamer, ts);
 create index if not exists ix_gifts_stream      on public.gifts (stream_id);

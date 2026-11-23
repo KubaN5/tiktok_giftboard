@@ -40,21 +40,24 @@ V **Site configuration → Environment variables** nastav:
 Každý push do `main` se nasadí automaticky. Konkrétní účet lze otevřít odkazem `…/?u=ucet`.
 
 ## 3. Sběrač
-```bash
-cd collector
-cp .env.example .env        # doplň SUPABASE_URL, SUPABASE_SECRET_KEY, STREAMERS
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python tracker.py           # nebo: python tracker.py @ucet1 @ucet2
-```
+Ve složce `collector/` vytvoř `.env` podle `.env.example`. URL a účet jsou předvyplněné, doplň jen
+`SUPABASE_SECRET_KEY` (Supabase → Project Settings → API Keys → Secret key).
 
-**Docker:**
-```bash
-docker build -t tiktok-collector collector
-docker run -d --name tiktok-collector --restart unless-stopped --env-file collector/.env tiktok-collector
-```
+**Windows PC:** stáhni repo, dvojklik na `collector/start.bat`. Při prvním spuštění vytvoří `.env`,
+otevře ho v Notepadu, pak založí `.venv` a spustí sběrač. Potřeba Python 3.10+ (python.org).
 
-**systemd:** viz `collector/tiktok-collector.service`.
+**Raspberry Pi / Linux s Dockerem:**
+```bash
+git clone https://github.com/KubaN5/tiktok_giftboard && cd tiktok_giftboard/collector
+cp .env.example .env && nano .env          # doplň secret klíč
+docker compose up -d --build               # běží na pozadí, sám se restartuje
+docker compose logs -f                     # logy
+```
+**Bez Dockeru:** `./start.sh` (případně jako služba přes `tiktok-collector.service`).
+
+**Přepnutí PC → Raspberry:** spusť sběrač na Raspberry, ověř v logu „Hlídám: …“, pak vypni PC.
+Překryv nevadí – každý dar má TikTok `msg_id` s unikátním klíčem v DB, takže se nezapočítá dvakrát.
+Na Raspberry stačí 64bit Raspberry Pi OS (image `python:3.12-slim` je i pro ARM).
 
 ## Poznámky
 - Zachytí jen vysílání, během kterých sběrač běží.
