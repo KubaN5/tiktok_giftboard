@@ -524,8 +524,12 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                                "scores": {str(w.key): int(w.value.hostscore) for w in ev.armies or [] if w.value},
                                "result": {str(k): {"score": int(v.score), "result": getattr(v.result, "name", str(v.result))}
                                           for k, v in (ev.battle_result or {}).items()}}, ev)
-                    log.info("@%s: bitva %s (%s)", streamer, getattr(ev.action, "name", ev.action),
-                             ", ".join(a["display_id"] for a in anchors.values()))
+                    action = getattr(ev.action, "name", str(ev.action))
+                    label = {"OPEN": "Duel ZAČAL", "ACCEPT": "Duel ZAČAL", "FINISH": "Duel SKONČIL",
+                             "LINK_MIC_BATTLE_BATTLE_ACTION_CUT_SHORT": "Duel SKONČIL (předčasně)"}.get(action,
+                                                                                                  f"Duel: {action}")
+                    who = ", ".join("@" + a["display_id"] for a in anchors.values())
+                    log.info("@%s: %s%s", streamer, label, f" ({who})" if who else "")
                 except Exception as ex:
                     log.warning("@%s: událost bitvy se nepodařilo zpracovat: %s", streamer, ex)
 
