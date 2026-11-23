@@ -109,6 +109,10 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Windows: `CREATE_NO_WINDOW`, jinak by `pythonw.exe` (Plánovač úloh) otevíral okno konzole.
 - Otestováno v workspace se simulovaným FLV streamem (nahrání, stop, výpadek + navázání, konec). Na skutečném LIVE zatím ne.
 - Docker: ffmpeg v image, záznamy do volume `./recordings` (uid 10001).
+- `RECORD_SHARE_DIR` (volitelné): hotové MP4 se po převodu přesune (`shutil.move`) do `<share>/<účet>/` – pro sdílení
+  přes OneDrive/Google Drive. Do sync složky se záměrně nenahrává přímo (rostoucí `.ts`, zámky souborů).
+  Jakub chce záznamy sdílet s dalším člověkem přes OneDrive/Google Drive (23. 11.); varianta „jen nahrávat bez
+  Supabase klíče“ na druhém PC zatím neudělaná.
 
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.

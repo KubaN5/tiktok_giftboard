@@ -13,6 +13,7 @@ Konfigurace přes proměnné prostředí (nebo soubor .env vedle skriptu):
     RECORD                volitelné – 1 = nahrávat video vysílání (potřeba ffmpeg)
     RECORD_DIR            kam ukládat záznamy (výchozí složka recordings vedle skriptu)
     RECORD_QUALITY        origin | uhd | hd | sd | ld (výchozí origin = nejlepší dostupná)
+    RECORD_SHARE_DIR      volitelné – hotová MP4 přesunout sem (např. složka OneDrive / Google Drive)
     FFMPEG_PATH           volitelné – cesta k ffmpeg, pokud není v PATH
 
 Použití:
@@ -131,8 +132,8 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32
 
 
 class RecordConfig:
-    def __init__(self, ffmpeg: str, out_dir: Path, quality: str):
-        self.ffmpeg, self.out_dir, self.quality = ffmpeg, out_dir, quality
+    def __init__(self, ffmpeg: str, out_dir: Path, quality: str, share_dir: Path | None = None):
+        self.ffmpeg, self.out_dir, self.quality, self.share_dir = ffmpeg, out_dir, quality, share_dir
 
     @classmethod
     def from_env(cls) -> "RecordConfig | None":
@@ -148,7 +149,8 @@ class RecordConfig:
         quality = (os.getenv("RECORD_QUALITY") or "origin").strip().lower()
         if quality not in QUALITIES:
             quality = "origin"
-        return cls(ffmpeg, out, quality)
+        share = Path(os.getenv("RECORD_SHARE_DIR")) if os.getenv("RECORD_SHARE_DIR") else None
+        return cls(ffmpeg, out, quality, share)
 
 
 def pick_stream_url(room_info: dict, quality: str) -> str | None:
@@ -249,21 +251,33 @@ class Recorder:
 
     async def _finalize(self) -> None:
         for part in self.parts:
-            if not part.exists() or part.stat().st_size < 100_000:
-                part.unlink(missing_ok=True)
-                continue
-            mp4 = part.with_suffix(".mp4")
-            proc = await asyncio.create_subprocess_exec(
-                self.cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(part),
-                "-c", "copy", "-movflags", "+faststart", str(mp4),
-                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL, creationflags=NO_WINDOW)
-            if await proc.wait() == 0 and mp4.exists() and mp4.stat().st_size > 0:
-                part.unlink(missing_ok=True)
-                log.info("@%s: záznam uložen: %s (%.1f MB)", self.streamer, mp4, mp4.stat().st_size / 1e6)
-            else:
-                mp4.unlink(missing_ok=True)
-                log.warning("@%s: převod na MP4 se nepovedl, záznam zůstává jako %s", self.streamer, part)
+            try:
+                await self._finalize_part(part)
+            except Exception as ex:                       # např. soubor zamčený antivirem / synchronizací
+                log.warning("@%s: dokončení %s selhalo: %s", self.streamer, part.name, ex)
+
+    async def _finalize_part(self, part: Path) -> None:
+        if not part.exists() or part.stat().st_size < 100_000:
+            part.unlink(missing_ok=True)
+            return
+        mp4 = part.with_suffix(".mp4")
+        proc = await asyncio.create_subprocess_exec(
+            self.cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(part),
+            "-c", "copy", "-movflags", "+faststart", str(mp4),
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL, creationflags=NO_WINDOW)
+        if await proc.wait() == 0 and mp4.exists() and mp4.stat().st_size > 0:
+            part.unlink(missing_ok=True)
+            size = mp4.stat().st_size / 1e6
+            if self.cfg.share_dir:                        # do sdílené složky až hotový soubor
+                dest = self.cfg.share_dir / self.streamer / mp4.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(shutil.move, str(mp4), str(dest))
+                mp4 = dest
+            log.info("@%s: záznam uložen: %s (%.1f MB)", self.streamer, mp4, size)
+        else:
+            mp4.unlink(missing_ok=True)
+            log.warning("@%s: převod na MP4 se nepovedl, záznam zůstává jako %s", self.streamer, part)
 
 
 # --------------------------------------------------------------------------
@@ -362,7 +376,8 @@ async def run(usernames: list[str], interval: int) -> None:
 
     rec_cfg = RecordConfig.from_env()
     if rec_cfg:
-        log.info("Nahrávání videa zapnuto → %s (kvalita %s)", rec_cfg.out_dir, rec_cfg.quality)
+        log.info("Nahrávání videa zapnuto → %s (kvalita %s)%s", rec_cfg.out_dir, rec_cfg.quality,
+                 f", hotová MP4 se přesunou do {rec_cfg.share_dir}" if rec_cfg.share_dir else "")
     store = Store(url, key)
     streamers = [norm(u) for u in usernames]
     for s in streamers:

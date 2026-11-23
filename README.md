@@ -67,6 +67,8 @@ Sběrač umí každé zachycené vysílání uložit jako video. Stačí mít **
 - **Raspberry (Docker):** ffmpeg je v image; jednorázově `mkdir -p recordings && sudo chown 10001 recordings`.
 
 Záznamy se ukládají do `collector/recordings/<účet>/RRRR-MM-DD_HH-MM.mp4` (jiná složka: `RECORD_DIR`).
+**Sdílení přes OneDrive / Google Drive:** `RECORD_SHARE_DIR=C:\Users\<ty>\OneDrive\TikTok` – nahrává se dál lokálně
+a do sdílené složky se přesune až hotové MP4 (synchronizace tak nenahrává rozpracovaný soubor ani ho nezamyká).
 Kvalita `RECORD_QUALITY`: `origin` (nejlepší, výchozí), `uhd` 720p, `hd` 540p, `sd`/`ld` 480p.
 Video se nepřekódovává (nezatěžuje procesor); hodina má zhruba 0,5–2 GB.
 
