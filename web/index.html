@@ -67,6 +67,8 @@
   .tl { position:relative; height:8px; border-radius:4px; background:#2f8f5b; margin:6px 0 4px; overflow:hidden; }
   .tl span { position:absolute; top:0; bottom:0; background:#ff4d4d; min-width:2px; }
   .cov .gaps { color:var(--muted); font-size:13px; }
+  .cov .okfold summary { cursor:pointer; font-size:14px; }
+  .cov .okfold .row:first-of-type { border-top:1px solid var(--line); margin-top:8px; }
 </style>
 </head>
 <body>
@@ -103,7 +105,7 @@
   </table>
   <section class="cov" id="cov">
     <h2>Výpadky sběru</h2>
-    <div class="hint">Kdy během vysílání sběrač nesbíral (pád PC, výpadek internetu, pozdní spuštění) – dary z té doby chybí. Zelená = sbíralo se, červená = výpadek (od 1 min).</div>
+    <div class="hint">Kdy během vysílání sběrač nesbíral (pád PC, výpadek internetu, pozdní spuštění) – dary z té doby chybí. Řídí se zvoleným obdobím nebo vysíláním. Zelená = sbíralo se, červená = výpadek (od 1 min).</div>
     <div id="covlist"></div>
   </section>
   <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. 💎 = cena daru v mincích. Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p></footer>
@@ -156,13 +158,13 @@ async function loadStreamers() {
 
 let coverage = [];   // výpadky sběru po vysíláních (stream_coverage)
 const hm = t => new Date(t).toLocaleTimeString("cs-CZ", {hour:"2-digit", minute:"2-digit"});
-const dur = sec => { const m = Math.round(sec / 60); return m < 60 ? `${m} min` : `${Math.floor(m/60)} h ${m % 60} min`; };
+const dur = sec => { const m = Math.round(sec / 60); return m < 60 ? `${m} min` : `${Math.floor(m/60)} h` + (m % 60 ? ` ${m % 60} min` : ""); };
 const gapText = g => `${hm(g.from)}–${hm(g.to)} (${dur(g.seconds)})`;
 
 async function loadStreams() {
   const s = $("#streamer").value; if (!s) return [];
   const list = await rpc("list_streams", { p_streamer: s });
-  try { coverage = await rpc("stream_coverage", { p_streamer: s, p_limit: 30 }); } catch (e) { console.warn(e); coverage = []; }
+  try { coverage = await rpc("stream_coverage", { p_streamer: s, p_limit: 2000 }); } catch (e) { console.warn(e); coverage = []; }
   const missing = Object.fromEntries(coverage.map(c => [c.stream_id, c.missing_seconds]));
   const sel = $("#stream"), cur = sel.value;
   sel.innerHTML = '<option value="">— konkrétní vysílání —</option>' + list.map(x => {
@@ -173,39 +175,67 @@ async function loadStreams() {
   return list;
 }
 
-// Přehled výpadků + upozornění nad žebříčkem u vybraného / posledního vysílání
+// Výpadky sběru podle filtru: konkrétní / poslední vysílání = detail jednoho vysílání,
+// 24 h / 7 dní / 30 dní / Celkem = souhrn za období + jen vysílání s výpadkem (ostatní sbalená)
+const PERIOD_MS = { "24h": 864e5, "7d": 7 * 864e5, "30d": 30 * 864e5 };
+const PERIOD_TXT = { all: "Celkem", "30d": "Za 30 dní", "7d": "Za 7 dní", "24h": "Za 24 h" };
+
+function covRow(c) {
+  const day = new Date(c.started_at).toLocaleDateString("cs-CZ", {day:"numeric", month:"numeric"});
+  const end = c.live ? '<span class="live">LIVE</span>' : hm(c.ended_at) + (c.end_uncertain ? " (konec nejistý)" : "");
+  const pct = c.total_seconds ? Math.max(0, 100 - 100 * c.missing_seconds / c.total_seconds) : 100;
+  const t0 = new Date(c.started_at).getTime(), span = Math.max(c.total_seconds, 1) * 1000;
+  const marks = (c.gaps || []).map(g => {
+    const l = 100 * (new Date(g.from).getTime() - t0) / span, w = 100 * g.seconds * 1000 / span;
+    return `<span style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%" title="${esc(gapText(g))}"></span>`;
+  }).join("");
+  const state = c.missing_seconds
+    ? `<span class="bad">⚠️ chybí ${dur(c.missing_seconds)} · sebráno ${pct.toFixed(0)} %</span>`
+    : '<span class="ok">✓ bez výpadku</span>';
+  return `<div class="row"><div class="head"><span>${day} ${hm(c.started_at)}–${end} · ${dur(c.total_seconds)}</span>${state}</div>
+    <div class="tl">${marks}</div>
+    ${c.gaps?.length ? `<div class="gaps">Výpadky: ${c.gaps.map(gapText).join(", ")}</div>` : ""}</div>`;
+}
+
 function renderCoverage(streams) {
+  const box = $("#covlist"), note = $("#gapnote");
+  note.classList.remove("show");
   if (!coverage.length) {
-    $("#covlist").innerHTML = '<div class="gaps">Zatím žádné zachycené vysílání. Až sběrač zachytí první LIVE, objeví se tu, jestli se sbíralo celou dobu, nebo kdy vypadl.</div>';
-  } else {
-    $("#covlist").innerHTML = coverage.slice(0, 10).map(c => {
-      const day = new Date(c.started_at).toLocaleDateString("cs-CZ", {day:"numeric", month:"numeric"});
-      const end = c.live ? '<span class="live">LIVE</span>' : hm(c.ended_at) + (c.end_uncertain ? " (konec nejistý)" : "");
-      const pct = c.total_seconds ? Math.max(0, 100 - 100 * c.missing_seconds / c.total_seconds) : 100;
-      const t0 = new Date(c.started_at).getTime(), span = Math.max(c.total_seconds, 1) * 1000;
-      const marks = (c.gaps || []).map(g => {
-        const l = 100 * (new Date(g.from).getTime() - t0) / span, w = 100 * g.seconds * 1000 / span;
-        return `<span style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%" title="${esc(gapText(g))}"></span>`;
-      }).join("");
-      const state = c.missing_seconds
-        ? `<span class="bad">⚠️ chybí ${dur(c.missing_seconds)} · sebráno ${pct.toFixed(0)} %</span>`
-        : '<span class="ok">✓ bez výpadku</span>';
-      return `<div class="row"><div class="head"><span>${day} ${hm(c.started_at)}–${end} · ${dur(c.total_seconds)}</span>${state}</div>
-        <div class="tl">${marks}</div>
-        ${c.gaps?.length ? `<div class="gaps">Výpadky: ${c.gaps.map(gapText).join(", ")}</div>` : ""}</div>`;
-    }).join("");
+    box.innerHTML = '<div class="gaps">Zatím žádné zachycené vysílání. Až sběrač zachytí první LIVE, objeví se tu, jestli se sbíralo celou dobu, nebo kdy vypadl.</div>';
+    return;
   }
+  // jedno vysílání (vybrané nebo „Poslední LIVE“)
   const id = streamId ? Number(streamId) : (period === "last" && streams[0] ? streams[0].id : null);
-  const c = id ? coverage.find(x => x.stream_id === id) : null;
-  const note = $("#gapnote");
-  if (c && c.missing_seconds) {
-    note.innerHTML = `⚠️ V tomhle vysílání sběrač nesbíral ${dur(c.missing_seconds)}: ${c.gaps.map(gapText).join(", ")}. Dary z té doby v žebříčku chybí.`;
+  if (id) {
+    const c = coverage.find(x => x.stream_id === id);
+    box.innerHTML = c ? covRow(c) : '<div class="gaps">Pro tohle vysílání nejsou údaje o sběru.</div>';
+    if (c && c.missing_seconds) {
+      note.innerHTML = `⚠️ V tomhle vysílání sběrač nesbíral ${dur(c.missing_seconds)}: ${c.gaps.map(gapText).join(", ")}. Dary z té doby v žebříčku chybí.`;
+      note.classList.add("show");
+    }
+    return;
+  }
+  // období: vysílání, která do něj aspoň zčásti zasahují (bráno celé)
+  const since = PERIOD_MS[period] ? Date.now() - PERIOD_MS[period] : null;
+  const list = coverage.filter(c => !since || c.live || new Date(c.ended_at).getTime() >= since);
+  const label = PERIOD_TXT[period] || "Celkem";
+  if (!list.length) { box.innerHTML = `<div class="gaps">${label}: v tomto období žádné vysílání.</div>`; return; }
+  const total = list.reduce((a, c) => a + c.total_seconds, 0);
+  const miss = list.reduce((a, c) => a + c.missing_seconds, 0);
+  const bad = list.filter(c => c.missing_seconds), ok = list.filter(c => !c.missing_seconds);
+  const pct = total ? Math.max(0, 100 - 100 * miss / total) : 100;
+  const n = list.length;
+  const head = miss
+    ? `<span class="bad">⚠️ chybí ${dur(miss)} · sebráno ${pct.toFixed(0)} %</span>`
+    : '<span class="ok">✓ bez výpadku</span>';
+  let html = `<div class="row sum"><div class="head"><span><b>${label}</b>: ${n} vysílání · ${dur(total)}</span>${head}</div></div>`;
+  html += bad.map(covRow).join("");
+  if (ok.length) html += `<details class="row okfold"><summary class="ok">✓ ${ok.length} vysílání bez výpadku</summary>${ok.map(covRow).join("")}</details>`;
+  box.innerHTML = html;
+  if (miss) {
+    note.innerHTML = `⚠️ ${label} sběrač nesbíral ${dur(miss)} (výpadek u ${bad.length} z ${n} vysílání, sebráno ${pct.toFixed(0)} %) – dary z té doby v žebříčku chybí. Podrobnosti dole.`;
     note.classList.add("show");
-  } else if (!id) {
-    const bad = coverage.filter(x => x.missing_seconds).length;
-    note.innerHTML = bad ? `⚠️ U ${bad} z posledních ${coverage.length} vysílání byl výpadek sběru – dary z té doby chybí. Podrobnosti dole.` : "";
-    note.classList.toggle("show", !!bad && period !== "last");
-  } else { note.classList.remove("show"); }
+  }
 }
 
 // Stav sběračů (heartbeat každých 30 s; online = zpráva za poslední 2 min)

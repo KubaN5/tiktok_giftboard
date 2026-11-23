@@ -445,7 +445,7 @@ language sql stable security definer set search_path = public as $$
         from streams s
         where s.streamer = lower(ltrim(p_streamer, '@'))
         order by s.started_at desc
-        limit least(greatest(p_limit, 1), 100)
+        limit least(greatest(p_limit, 1), 2000)
     ),
     cv as (       -- úseky pokrytí oříznuté na dobu vysílání (±15 s = polovina intervalu heartbeatu)
         select c.stream_id, greatest(c.started_at - interval '15 seconds', st.s0) as a,
