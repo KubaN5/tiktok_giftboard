@@ -443,8 +443,11 @@ def parse_battles(events: list[dict]) -> list[dict]:
                 start = e["t"]
                 if e.get("start_ms") and action in ("OPEN", "ACCEPT") and clock:
                     start = min(e["t"], e["start_ms"] / 1000 + clock)
-                cur = {"id": bid, "start": start, "end_at": None, "finish": None, "scores": [], "result": {}}
+                cur = {"id": bid, "start": start, "end_at": None, "finish": None, "scores": [], "result": {},
+                       "combo": {}, "combo_end": {}}
                 battles.append(cur)
+            if e.get("combo"):                          # série výher od TikToku: při startu / po konci
+                cur["combo_end" if action in finish_actions else "combo"] = dict(e["combo"])
             end_ms = e.get("end_ms") or ((e.get("start_ms") or 0) + 1000 * (e.get("duration") or 0))
             if e.get("start_ms") and end_ms and cur["end_at"] is None:
                 cur["end_at"] = end_ms / 1000 + clock
@@ -455,7 +458,8 @@ def parse_battles(events: list[dict]) -> list[dict]:
                 cur["result"] = {k: v.get("score", 0) for k, v in (e.get("result") or {}).items()}
         elif typ == "score" and e.get("scores"):
             if cur is None or cur["id"] != bid:
-                cur = {"id": bid, "start": e["t"], "end_at": None, "finish": None, "scores": [], "result": {}}
+                cur = {"id": bid, "start": e["t"], "end_at": None, "finish": None, "scores": [], "result": {},
+                       "combo": {}, "combo_end": {}}
                 battles.append(cur)
             cur["scores"].append((e["t"], dict(e["scores"])))
     return battles
@@ -544,6 +548,37 @@ def build_battles(ass: Ass, battles: list[dict], ours: str | None, vt, video_end
                 left = max(int(end_at - t + 0.999), 0)
                 pill(vt(t), vt(min(t + 1, end_at)), f"{left // 60:02d}:{left % 60:02d}")
                 t += 1
+        # odznaky v rozích oken: během duelu série výher („WIN x8“), po konci WIN xN / LOSE
+        fsb, bdh = round(22 * u), round(32 * u)
+        by2 = (layout[1] + round(10 * u)) if layout else panel_top + ph + round(8 * u)
+
+        def badge(s0: float, s1: float, side: int, label: str, col: str) -> None:
+            if s1 <= s0:
+                return
+            bwid = text_w(label, fsb, True) + round(24 * u)
+            xx = bx + round(10 * u) if side == 0 else bx + bw - round(10 * u) - bwid
+            ass.shape(s0, s1, xx, by2, rrect(bwid, bdh, bdh / 2), "&H202020&", "&H50&", layer=3, extra=r"\fad(200,200)")
+            ass.add(s0, s1, "Text", rf"{{\an5\pos({round(xx + bwid / 2)},{by2 + bdh // 2})\b1\i1\fs{fsb}\c{col}\fad(200,200)}}{label}", 4)
+
+        def sides(d: dict) -> tuple[int, int]:
+            if not d:
+                return 0, 0
+            me = ours if ours in d else next(iter(d))
+            return int(d.get(me, 0)), int(max((v for k, v in d.items() if k != me), default=0))
+
+        streak = sides(b["combo"])
+        if not b["combo"]:                              # TikTok sérii neposlal → spočítej z předchozích duelů v záznamu
+            k = 0
+            for prev in reversed(battles[:i]):
+                if prev.get("won") is True:
+                    k += 1
+                else:
+                    break
+            streak = (k, 0)
+        battle_end = b["finish"] or stop
+        for side in (0, 1):
+            if streak[side] > 0:
+                badge(vt(b["start"]), vt(battle_end), side, f"WIN x{streak[side]}", GOLD)
         if b["finish"]:
             pill(vt(b["finish"]), vt(stop), "Vítězné kolo")
             final = timeline[-1]
@@ -551,16 +586,12 @@ def build_battles(ass: Ass, battles: list[dict], ours: str | None, vt, video_end
                 labels = ("DRAW", "DRAW")
             else:
                 labels = ("WIN", "LOSE") if final[1] > final[2] else ("LOSE", "WIN")
-            fsb, bdh = round(22 * u), round(32 * u)
-            by2 = (layout[1] + round(10 * u)) if layout else panel_top + ph + round(8 * u)
-            for k, lab in enumerate(labels):
-                bwid = text_w(lab, fsb, True) + round(24 * u)
-                xx = bx + round(10 * u) if k == 0 else bx + bw - round(10 * u) - bwid
-                col = GOLD if lab == "WIN" else "&HDDDDDD&"
-                ass.shape(vt(b["finish"]), vt(stop), xx, by2, rrect(bwid, bdh, bdh / 2), "&H202020&", "&H50&", layer=3,
-                          extra=r"\fad(200,300)")
-                ass.add(vt(b["finish"]), vt(stop), "Text",
-                        rf"{{\an5\pos({round(xx + bwid / 2)},{by2 + bdh // 2})\b1\i1\fs{fsb}\c{col}\fad(200,300)}}{lab}", 4)
+            b["won"] = labels[0] == "WIN"
+            after = sides(b["combo_end"]) if b["combo_end"] else (
+                (streak[0] + 1 if labels[0] == "WIN" else 0), (streak[1] + 1 if labels[1] == "WIN" else 0))
+            for side, lab in enumerate(labels):
+                text = f"WIN x{after[side]}" if lab == "WIN" and after[side] > 1 else lab
+                badge(vt(b["finish"]), vt(stop), side, text, GOLD if lab == "WIN" else "&HDDDDDD&")
             # velký nápis uprostřed na pár sekund (jako animace v aplikaci)
             big = "WIN" if labels[0] == "WIN" else ("DRAW" if labels[0] == "DRAW" else "LOSE")
             ymid = (layout[1] + layout[3] // 2) if layout else h // 2

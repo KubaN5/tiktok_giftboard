@@ -523,7 +523,9 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                                "anchors": anchors,
                                "scores": {str(w.key): int(w.value.hostscore) for w in ev.armies or [] if w.value},
                                "result": {str(k): {"score": int(v.score), "result": getattr(v.result, "name", str(v.result))}
-                                          for k, v in (ev.battle_result or {}).items()}}, ev)
+                                          for k, v in (ev.battle_result or {}).items()},
+                               # série výher v řadě, jak ji počítá TikTok („WIN x8“)
+                               "combo": {str(k): int(v.combo_count) for k, v in (ev.battle_combo_v2 or {}).items()}}, ev)
                     action = getattr(ev.action, "name", str(ev.action))
                     label = {"OPEN": "Duel ZAČAL", "ACCEPT": "Duel ZAČAL", "FINISH": "Duel SKONČIL",
                              "LINK_MIC_BATTLE_BATTLE_ACTION_CUT_SHORT": "Duel SKONČIL (předčasně)"}.get(action,
