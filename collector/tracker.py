@@ -16,6 +16,8 @@ Konfigurace přes proměnné prostředí (nebo soubor .env vedle skriptu):
     RECORD_DIR            kam ukládat záznamy (výchozí složka recordings vedle skriptu)
     RECORD_QUALITY        origin | uhd | hd | sd | ld (výchozí origin = nejlepší dostupná)
     RECORD_SHARE_DIR      volitelné – hotová MP4 přesunout sem (např. složka OneDrive / Google Drive)
+    RECORD_OVERLAY        volitelné – 1 = po vysílání vyrobit i *_overlay.mp4 s dary, komentáři a bitvami
+                          (události se při nahrávání ukládají vždy do <záznam>.events.jsonl; ručně: overlay.py)
     FFMPEG_PATH           volitelné – cesta k ffmpeg, pokud není v PATH
     COLLECTOR_NAME        volitelné – jméno sběrače na webu (výchozí název počítače)
 
@@ -35,6 +37,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -195,8 +198,10 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32
 
 
 class RecordConfig:
-    def __init__(self, ffmpeg: str, out_dir: Path, quality: str, share_dir: Path | None = None):
+    def __init__(self, ffmpeg: str, out_dir: Path, quality: str, share_dir: Path | None = None,
+                 overlay: bool = False):
         self.ffmpeg, self.out_dir, self.quality, self.share_dir = ffmpeg, out_dir, quality, share_dir
+        self.overlay = overlay
 
     @classmethod
     def from_env(cls) -> "RecordConfig | None":
@@ -213,7 +218,8 @@ class RecordConfig:
         if quality not in QUALITIES:
             quality = "origin"
         share = Path(os.getenv("RECORD_SHARE_DIR")) if os.getenv("RECORD_SHARE_DIR") else None
-        return cls(ffmpeg, out, quality, share)
+        overlay = os.getenv("RECORD_OVERLAY", "").strip().lower() in ("1", "true", "yes", "ano")
+        return cls(ffmpeg, out, quality, share, overlay)
 
 
 def pick_stream_url(room_info: dict, quality: str) -> str | None:
@@ -241,20 +247,35 @@ class Recorder:
     díly na .mp4 (bezztrátově) a .ts smaže.
     """
 
-    def __init__(self, streamer: str, client, cfg: RecordConfig):
+    def __init__(self, streamer: str, client, cfg: RecordConfig, room_id: str = ""):
         self.streamer, self.client, self.cfg = streamer, client, cfg
         self.proc: asyncio.subprocess.Process | None = None
         self.stopping = False
         self.parts: list[Path] = []
         self.task: asyncio.Task | None = None
+        self.folder = cfg.out_dir / streamer
+        self.base = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        self.events_path = self.folder / f"{self.base}.events.jsonl"
+        self._events_failed = False
+        self.event({"type": "meta", "streamer": streamer, "room_id": room_id, "v": 1})
+
+    def event(self, data: dict) -> None:
+        """Zapíše událost (dar, komentář, bitva…) s časem do <záznam>.events.jsonl – podklad pro overlay.py."""
+        try:
+            self.folder.mkdir(parents=True, exist_ok=True)
+            with open(self.events_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"t": round(time.time(), 3), **data}, ensure_ascii=False) + "\n")
+        except Exception as ex:
+            if not self._events_failed:
+                log.warning("@%s: nepodařilo se zapsat události: %s", self.streamer, ex)
+            self._events_failed = True
 
     def start(self) -> None:
         self.task = asyncio.create_task(self._run())
 
     async def _run(self) -> None:
-        folder = self.cfg.out_dir / self.streamer
+        folder, base = self.folder, self.base
         folder.mkdir(parents=True, exist_ok=True)
-        base = datetime.now().strftime("%Y-%m-%d_%H-%M")
         failures = 0
         while not self.stopping and failures < 5:
             try:
@@ -264,6 +285,11 @@ class Recorder:
                 info = None
             if info is not None and info.get("status") == 4:           # 4 = vysílání skončilo
                 break
+            if info is not None and not self.parts:                    # kdo je hostitel (strana v bitvě)
+                owner = info.get("owner") or {}
+                self.event({"type": "owner", "id": str(owner.get("id_str") or owner.get("id") or ""),
+                            "display_id": owner.get("display_id") or self.streamer,
+                            "nick": owner.get("nickname") or ""})
             url = pick_stream_url(info or {}, self.cfg.quality)
             if not url:
                 failures += 1
@@ -275,6 +301,7 @@ class Recorder:
             self.parts.append(part)
             log.info("@%s: nahrávám video → %s", self.streamer, part)
             RECORDING.add(self.streamer)
+            self.event({"type": "part", "file": part.stem})            # čas začátku dílu = čas 0 videa
             self.proc = await asyncio.create_subprocess_exec(
                 self.cfg.ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error",
                 "-rw_timeout", "20000000",                            # 20 s bez dat → ffmpeg skončí
@@ -316,16 +343,28 @@ class Recorder:
                 log.warning("@%s: dokončení nahrávky selhalo: %s", self.streamer, ex)
 
     async def _finalize(self) -> None:
+        done: list[Path] = []
         for part in self.parts:
             try:
-                await self._finalize_part(part)
+                mp4 = await self._finalize_part(part)
+                if mp4:
+                    done.append(mp4)
             except Exception as ex:                       # např. soubor zamčený antivirem / synchronizací
                 log.warning("@%s: dokončení %s selhalo: %s", self.streamer, part.name, ex)
+        events = self.events_path
+        if done and events.exists() and self.cfg.share_dir:   # kopie událostí k videu (ruční overlay.py)
+            try:
+                dest = self.cfg.share_dir / self.streamer / events.name
+                await asyncio.to_thread(shutil.copyfile, str(events), str(dest))
+            except Exception as ex:
+                log.warning("@%s: kopie událostí do sdílené složky selhala: %s", self.streamer, ex)
+        if done and self.cfg.overlay and events.exists():
+            OVERLAY_TASKS.add(asyncio.create_task(render_overlays(self.streamer, done, events, self.cfg)))
 
-    async def _finalize_part(self, part: Path) -> None:
+    async def _finalize_part(self, part: Path) -> Path | None:
         if not part.exists() or part.stat().st_size < 100_000:
             part.unlink(missing_ok=True)
-            return
+            return None
         mp4 = part.with_suffix(".mp4")
         proc = await asyncio.create_subprocess_exec(
             self.cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(part),
@@ -341,9 +380,41 @@ class Recorder:
                 await asyncio.to_thread(shutil.move, str(mp4), str(dest))
                 mp4 = dest
             log.info("@%s: záznam uložen: %s (%.1f MB)", self.streamer, mp4, size)
-        else:
-            mp4.unlink(missing_ok=True)
-            log.warning("@%s: převod na MP4 se nepovedl, záznam zůstává jako %s", self.streamer, part)
+            return mp4
+        mp4.unlink(missing_ok=True)
+        log.warning("@%s: převod na MP4 se nepovedl, záznam zůstává jako %s", self.streamer, part)
+        return None
+
+
+OVERLAY_TASKS: set[asyncio.Task] = set()
+OVERLAY_LOCK = asyncio.Lock()
+BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) if sys.platform == "win32" else 0
+
+
+async def render_overlays(streamer: str, videos: list[Path], events: Path, cfg: RecordConfig) -> None:
+    """Na pozadí (a se sníženou prioritou) vyrobí *_overlay.mp4 přes overlay.py – jedno video po druhém."""
+    script = Path(__file__).resolve().with_name("overlay.py")
+    async with OVERLAY_LOCK:
+        for video in videos:
+            out = cfg.out_dir / streamer / f"{video.stem}_overlay.mp4"
+            log.info("@%s: vyrábím video s dary a komentáři → %s (může trvat dlouho)", streamer, out.name)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, str(script), str(video), "--events", str(events), "--out", str(out),
+                    "--ffmpeg", cfg.ffmpeg, stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                    creationflags=NO_WINDOW | BELOW_NORMAL)
+                _, err = await proc.communicate()
+                if proc.returncode != 0 or not out.exists():
+                    log.warning("@%s: overlay se nepovedl: %s", streamer, err.decode(errors="replace")[-500:])
+                    continue
+                if cfg.share_dir:
+                    dest = cfg.share_dir / streamer / out.name
+                    await asyncio.to_thread(shutil.move, str(out), str(dest))
+                    out = dest
+                log.info("@%s: video s overlayem hotové: %s", streamer, out)
+            except Exception as ex:
+                log.warning("@%s: overlay %s selhal: %s", streamer, video.name, ex)
 
 
 # --------------------------------------------------------------------------
@@ -352,7 +423,8 @@ class Recorder:
 
 async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfig | None = None) -> None:
     from TikTokLive import TikTokLiveClient
-    from TikTokLive.events import ConnectEvent, DisconnectEvent, GiftEvent, LiveEndEvent
+    from TikTokLive.events import (CommentEvent, ConnectEvent, DisconnectEvent, GiftEvent, LinkMicArmiesEvent,
+                                   LinkMicBattleEvent, LiveEndEvent)
 
     close_pending = True    # při startu i po každém LIVE: až účet nevysílá, uzavřít visící vysílání v DB
     while True:
@@ -393,13 +465,66 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                 LIVE.add(streamer)
                 log.info("@%s je LIVE (room %s) – sbírám dary", streamer, ev.room_id)
                 if rec_cfg and state["rec"] is None:
-                    state["rec"] = Recorder(streamer, client, rec_cfg)
+                    state["rec"] = Recorder(streamer, client, rec_cfg, str(ev.room_id))
                     state["rec"].start()
+
+            def rec_event(data: dict, ev=None) -> None:
+                rec = state["rec"]
+                if rec is not None:
+                    st = getattr(getattr(ev, "common", None), "create_time", 0) if ev is not None else 0
+                    rec.event({**data, "st": int(st or 0)} if st else data)
+
+            @client.on(CommentEvent)
+            async def _on_comment(ev: CommentEvent):
+                try:
+                    if ev.user is not None:
+                        rec_event({"type": "comment", "user": ev.user.unique_id, "nick": ev.user.nickname,
+                                   "text": ev.content}, ev)
+                except Exception as ex:
+                    log.debug("komentář: %s", ex)
+
+            @client.on(LinkMicBattleEvent)
+            async def _on_battle(ev: LinkMicBattleEvent):
+                try:
+                    bs = ev.battle_settings
+                    anchors = {}
+                    for w in ev.anchors_info or []:
+                        u = getattr(w.value, "user", None) if w.value else None
+                        if u is not None:
+                            anchors[str(w.key)] = {"display_id": u.display_id, "nick": u.nick_name}
+                    rec_event({"type": "battle", "battle_id": str(ev.battle_id),
+                               "action": getattr(ev.action, "name", str(ev.action)),
+                               "start_ms": int(getattr(bs, "start_time_ms", 0) or 0) if bs else 0,
+                               "duration": int(getattr(bs, "duration", 0) or 0) if bs else 0,
+                               "end_ms": int(getattr(bs, "end_time_ms", 0) or 0) if bs else 0,
+                               "anchors": anchors,
+                               "scores": {str(w.key): int(w.value.hostscore) for w in ev.armies or [] if w.value},
+                               "result": {str(k): {"score": int(v.score), "result": getattr(v.result, "name", str(v.result))}
+                                          for k, v in (ev.battle_result or {}).items()}}, ev)
+                    log.info("@%s: bitva %s (%s)", streamer, getattr(ev.action, "name", ev.action),
+                             ", ".join(a["display_id"] for a in anchors.values()))
+                except Exception as ex:
+                    log.warning("@%s: událost bitvy se nepodařilo zpracovat: %s", streamer, ex)
+
+            @client.on(LinkMicArmiesEvent)
+            async def _on_armies(ev: LinkMicArmiesEvent):
+                try:
+                    rec_event({"type": "score", "battle_id": str(ev.battle_id),
+                               "scores": {str(k): int(v.hostscore) for k, v in (ev.armies or {}).items()}}, ev)
+                except Exception as ex:
+                    log.warning("@%s: skóre bitvy se nepodařilo zpracovat: %s", streamer, ex)
 
             @client.on(GiftEvent)
             async def _on_gift(ev: GiftEvent):
                 if state["stream_id"] is None or ev.gift is None or ev.user is None:
                     return
+                try:                                        # pro overlay i průběh série (x1, x2, … x12)
+                    rec_event({"type": "gift", "uid": str(ev.user.id), "user": ev.user.unique_id,
+                               "nick": ev.user.nickname, "gift": ev.gift.name, "gift_id": ev.gift.id,
+                               "count": max(int(ev.repeat_count or 1), 1), "unit": int(ev.gift.diamond_count or 0),
+                               "streak": bool(ev.streaking)}, ev)
+                except Exception as ex:
+                    log.debug("dar do událostí: %s", ex)
                 # Streakovatelné dary (Rose…) chodí průběžně; počítá se až konec série,
                 # který nese celkový repeat_count – jinak by se započítaly vícekrát.
                 if ev.streaking:

@@ -76,6 +76,28 @@ Jak to funguje: během vysílání se zapisuje `.ts` (přehratelný i při pádu
 převede na `.mp4`. Při výpadku spojení se nahrávání naváže dalším dílem (`…_dil2.mp4`). Na dary nemá nahrávání vliv –
 když selže, sběr darů běží dál. Záznamy jsou jen pro vlastní potřebu – video patří autorce vysílání.
 
+### Překryvná vrstva: dary, komentáře a bitvy ve videu
+Video z TikToku obsahuje jen obraz a zvuk. Skóre bitvy, dary ani komentáře v něm nejsou, ty kreslí až aplikace.
+Sběrač si je proto při nahrávání ukládá s přesným časem do `<záznam>.events.jsonl` (vedle videa; při
+`RECORD_SHARE_DIR` se kopie přesune i do sdílené složky). Skript `collector/overlay.py` z nich vyrobí
+`<video>_overlay.mp4`: nahoře pruh bitvy se skóre a odpočtem (po konci VÝHRA / PROHRA), vlevo dole oznámení
+darů včetně průběhu série (x1 → x12), velké dary uprostřed a pod nimi poslední komentáře. Originál zůstane.
+
+- **Ručně:** přetáhni MP4 myší na `collector/overlay.bat`. Nebo v PowerShellu ve složce `collector`:
+  ```powershell
+  .\.venv\Scripts\python.exe overlay.py "G:\Můj disk\Shopadel\ucet\2026-11-23_16-55.mp4"
+  .\.venv\Scripts\python.exe overlay.py video.mp4 --start 600 --duration 60   # jen minuta na zkoušku
+  .\.venv\Scripts\python.exe overlay.py video.mp4 --frame 615                 # jeden snímek jako PNG
+  .\.venv\Scripts\python.exe overlay.py video.mp4 --delay 2                   # vrstva o 2 s později
+  ```
+- **Automaticky po vysílání:** `RECORD_OVERLAY=1` v `.env`. Video se překódovává, takže na slabším PC to může trvat
+  i déle než samotné vysílání. Běží to se sníženou prioritou a sběr darů to neruší.
+- **Starší záznamy bez souboru událostí:** `--from-db` stáhne ze Supabase aspoň dary (potřebuje secret klíč v `.env`),
+  ideálně s přesným začátkem videa: `--start-time "2026-11-23 16:55:43"`.
+
+Vrstva nevypadá jako TikTok, je to vlastní grafika ze stejných dat. Skóre bitvy chodí v jiných zprávách než dary;
+pokud ho knihovna TikTokLive nepřečte, pruh se neukáže.
+
 ## 5. Sběrač u někoho jiného (bez secret klíče)
 Web a databázi hostuješ ty, druhý člověk jen pustí sběrač u sebe. **Secret klíč mu nedávej** – měl by s ním plný
 přístup k databázi. Místo toho dostane vlastní **token**, se kterým umí jen přidávat vysílání a dary k povoleným

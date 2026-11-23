@@ -113,6 +113,19 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Migrace `collector_tokens`, `collector_close_streamer`. Sběrač při startu a po každém LIVE uzavře visící vysílání, jakmile účet nevysílá (výpadek sítě při konci LIVE). Otestováno: lokální Postgres + Supabase (jako `anon`, v transakci s rollbackem) a sběrač
   v režimu s tokenem proti mocku PostgREST. Na skutečném PC u druhého člověka zatím ne.
 
+## Překryvná vrstva do videa (od 23. 11. 2026)
+- Recorder zapisuje při `RECORD=1` do `recordings/<účet>/<base>.events.jsonl` (JSON na řádek, `t` = epoch PC):
+  `meta`, `owner` (id hostitelky z room info), `part` (čas spuštění ffmpeg = čas 0 dílu), `gift` (každá zpráva vč.
+  `streak` pro průběh série), `comment`, `battle` (LinkMicBattleEvent: action OPEN/FINISH…, start_ms, duration,
+  anchors, scores, result), `score` (LinkMicArmiesEvent: hostscore podle anchor id); `st` = čas serveru TikTok (ms).
+- `collector/overlay.py`: ASS titulky (libass) + `ffmpeg -vf ass=… -c:v libx264` → `<video>_overlay.mp4`. Volby
+  `--start/--duration` (ukázka), `--frame` (PNG), `--delay`, `--from-db` (dary ze Supabase pro staré záznamy),
+  `--ass-only`. `overlay.bat` = přetažení MP4. `RECORD_OVERLAY=1` → po vysílání automaticky (BELOW_NORMAL priorita,
+  jedno video po druhém, výsledek do `RECORD_SHARE_DIR`).
+- Přezdívky: NFKC + vyhození emoji (font je nemá). Naše strana v bitvě: `owner` → display_id v anchors → heuristika.
+- Otestováno jen s ukázkovými daty (skutečné dary + vymyšlené komentáře/bitva). **Komentáře a bitvy z ostrého LIVE zatím
+  neověřené** – parsování LinkMic zpráv v TikTokLive 7.0.1 může selhat (viz HashtagNamespace).
+
 ## Odhad výdělku v Kč (od 23. 11. 2026)
 - Jen web: `USD_PER_COIN = 0.005` × kurz USD/CZK (`api.frankfurter.dev`, záložně 22,35) – dlaždice „Výdělek ≈“
   a „≈ X Kč“ pod diamanty u každého dárce. `diamonds` v DB = cena daru v mincích (`gift.diamond_count`).
