@@ -24,7 +24,7 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 ## Kde co je
 | Co | Hodnota |
 |---|---|
-| GitHub | `KubaN5/tiktok_giftboard` (soukromé, větev `main`) |
+| GitHub | `KubaN5/tiktok_giftboard` (veřejné, větev `main`) |
 | Supabase | org „Tiktok“, projekt `rkyewweuirnnzrfpazbf`, eu-west-1, URL `https://rkyewweuirnnzrfpazbf.supabase.co` |
 | Supabase publishable klíč (veřejný, pro web) | `sb_publishable_sqHEZ6m0Wi-9Ae5vbhlZQQ_aGTFKzvP` |
 | Supabase secret klíč | jen v `collector/.env` na Jakubově PC – **nikdy ho nečíst, nežádat do chatu ani necommitovat** |
@@ -71,11 +71,9 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 ## Aktuální stav
 - [x] Supabase schéma nasazené a otestované (RPC, RLS, dedup, granty service_role).
 - [x] Web nasazený. Hlavička webu: „Galerie hanby – Shopaholic Adel“ (commit `e7e411e`).
-- [ ] **Netlify blokuje buildy z GitHubu**: „Build blocked: Unrecognized Git contributor. This plan allows only verified
-  account members to push to private repos.“ Free plán u soukromého repa sestaví jen commity od člena týmu s propojeným
-  GitHub účtem. Blokované jsou i commity `KubaN5 <KubaN5@users.noreply.github.com>` → GitHub `KubaN5` není propojený
-  s Netlify účtem. Commity od Clauda (autor „Claude“) projdou jen při veřejném repu nebo placeném plánu.
-  Poslední úspěšný deploy: `e4372cc` (spuštěný přes API, ne z gitu).
+- [x] Netlify blokoval buildy z gitu („Unrecognized Git contributor“ – Free plán u soukromého repa pouští jen commity
+  člena týmu s propojeným GitHubem). Vyřešeno 23. 11.: repo `KubaN5/tiktok_giftboard` je **veřejné** → každý push do `main`
+  se nasadí sám (ověřeno commitem `5bc94be`). Repo proto nesmí obsahovat tajné klíče (secret klíč je jen v `collector/.env`).
 - [x] Sběrač na Windows PC nainstalovaný a spuštěný, spojení se Supabase funguje („Hlídám: …“).
 - [ ] **Neověřeno na skutečném LIVE** – první vysílání účtu ukáže, jestli TikTokLive 7.0.1 a sign server fungují.
 - [ ] Běh na pozadí přes `install-task.ps1` zatím nezaregistrovaný.
