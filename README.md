@@ -98,6 +98,21 @@ darů včetně průběhu série (x1 → x12), velké dary uprostřed a pod nimi 
 Vrstva nevypadá jako TikTok, je to vlastní grafika ze stejných dat. Skóre bitvy chodí v jiných zprávách než dary;
 pokud ho knihovna TikTokLive nepřečte, pruh se neukáže.
 
+### Příprava pro YouTube a upozornění na Telegram
+Na YouTube se nahrává **ručně** přes YouTube Studio. Automatický upload přes YouTube API z neověřeného projektu
+YouTube natrvalo zamkne jako soukromé video (nejde zveřejnit ani odvolat), veřejné video by vyžadovalo audit u Googlu.
+Sběrač proto připraví všechno ostatní:
+
+- `YOUTUBE_PREP=1` (vyžaduje `RECORD_OVERLAY=1`): hotové `*_overlay.mp4` se přesune do `YOUTUBE_DIR`
+  (výchozí `<RECORD_SHARE_DIR>\YouTube`) jako `<účet>_<datum>_overlay.mp4` a vedle něj `.txt` s názvem a popisem
+  (top 10 dárců vysílání, součet mincí, odkaz `YOUTUBE_LINK`). Čisté video zůstává ve složce účtu.
+  Název podle šablony `YOUTUBE_TITLE` (`{ucet}`, `{datum}`, `{cas}`, `{dil}`).
+- **Telegram:** v Telegramu napiš [@BotFather](https://t.me/BotFather) → `/newbot` → token dej do `TELEGRAM_BOT_TOKEN`.
+  Pošli svému botovi libovolnou zprávu a spusť `.\.venv\Scripts\python.exe tracker.py --telegram-test` – vypíše
+  `TELEGRAM_CHAT_ID`. Doplň ho a test spusť znovu (pošle zkušební zprávu). Pak restartuj sběrač.
+  Bot napíše, když je video připravené k nahrání (cesta, délka, velikost, název a popis ke zkopírování),
+  a taky když se výroba overlaye nepovede. Bez `YOUTUBE_PREP` napíše jen, že je video s overlayem hotové.
+
 ## 5. Sběrač u někoho jiného (bez secret klíče)
 Web a databázi hostuješ ty, druhý člověk jen pustí sběrač u sebe. **Secret klíč mu nedávej** – měl by s ním plný
 přístup k databázi. Místo toho dostane vlastní **token**, se kterým umí jen přidávat vysílání a dary k povoleným

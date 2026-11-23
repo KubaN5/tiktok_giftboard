@@ -19,10 +19,18 @@ Konfigurace přes proměnné prostředí (nebo soubor .env vedle skriptu):
     RECORD_OVERLAY        volitelné – 1 = po vysílání vyrobit i *_overlay.mp4 s dary, komentáři a bitvami
                           (události se při nahrávání ukládají vždy do <záznam>.events.jsonl; ručně: overlay.py)
     FFMPEG_PATH           volitelné – cesta k ffmpeg, pokud není v PATH
+    YOUTUBE_PREP          volitelné – 1 = hotové *_overlay.mp4 přesunout do složky pro ruční nahrání na YouTube
+                          a vedle něj uložit .txt s názvem a popisem (top dárci vysílání); vyžaduje RECORD_OVERLAY=1
+    YOUTUBE_DIR           kam (výchozí <RECORD_SHARE_DIR>\\YouTube, bez sdílené složky recordings\\YouTube)
+    YOUTUBE_TITLE         šablona názvu: {ucet} {datum} {cas} {dil} (výchozí „{ucet} – TikTok LIVE {datum}“)
+    YOUTUBE_LINK          volitelné – odkaz připojený do popisu (např. žebříček na webu)
+    TELEGRAM_BOT_TOKEN    volitelné – token bota od @BotFather; s TELEGRAM_CHAT_ID pošle zprávu o hotovém videu
+    TELEGRAM_CHAT_ID      komu psát (zjistí: python tracker.py --telegram-test)
     COLLECTOR_NAME        volitelné – jméno sběrače na webu (výchozí název počítače)
 
 Použití:
     python tracker.py @ucet1 [@ucet2 ...] [--interval 60]
+    python tracker.py --telegram-test      # ověří Telegram / vypíše TELEGRAM_CHAT_ID
 """
 
 from __future__ import annotations
@@ -65,6 +73,10 @@ def load_dotenv(path: Path) -> None:
 
 def norm(username: str) -> str:
     return username.strip().lstrip("@").lower()
+
+
+def env_on(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "ano")
 
 
 def now_iso() -> str:
@@ -188,6 +200,14 @@ class Store:
                 failed = True
             await asyncio.sleep(HEARTBEAT_EVERY)
 
+    async def stream_top(self, streamer: str, stream_id: int, limit: int = 10) -> tuple[list[dict], dict]:
+        """Top dárci a součty jednoho vysílání (veřejné RPC webu – funguje se secret klíčem i s tokenem)."""
+        top = (await self._req("POST", "/rpc/leaderboard", json={
+            "p_streamer": streamer, "p_stream_id": stream_id, "p_limit": limit})).json() or []
+        totals = (await self._req("POST", "/rpc/leaderboard_totals", json={
+            "p_streamer": streamer, "p_stream_id": stream_id})).json() or []
+        return top, (totals[0] if totals else {})
+
     def add_gift(self, row: dict) -> None:
         row.setdefault("ts", now_iso())
         self.queue.put_nowait(row)
@@ -269,11 +289,17 @@ QUALITIES = ["origin", "uhd", "hd", "sd", "ld"]
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 
+DEFAULT_YT_TITLE = "{ucet} – TikTok LIVE {datum}"
+
+
 class RecordConfig:
     def __init__(self, ffmpeg: str, out_dir: Path, quality: str, share_dir: Path | None = None,
-                 overlay: bool = False):
+                 overlay: bool = False, youtube_dir: Path | None = None,
+                 youtube_title: str = DEFAULT_YT_TITLE, youtube_link: str = ""):
         self.ffmpeg, self.out_dir, self.quality, self.share_dir = ffmpeg, out_dir, quality, share_dir
         self.overlay = overlay
+        self.youtube_dir = youtube_dir          # None = příprava pro YouTube vypnutá
+        self.youtube_title, self.youtube_link = youtube_title, youtube_link
 
     @classmethod
     def from_env(cls) -> "RecordConfig | None":
@@ -290,8 +316,18 @@ class RecordConfig:
         if quality not in QUALITIES:
             quality = "origin"
         share = Path(os.getenv("RECORD_SHARE_DIR")) if os.getenv("RECORD_SHARE_DIR") else None
-        overlay = os.getenv("RECORD_OVERLAY", "").strip().lower() in ("1", "true", "yes", "ano")
-        return cls(ffmpeg, out, quality, share, overlay)
+        overlay = env_on("RECORD_OVERLAY")
+        yt_dir = None
+        if env_on("YOUTUBE_PREP"):
+            if not overlay:
+                log.warning("YOUTUBE_PREP=1 vyžaduje RECORD_OVERLAY=1 (na YouTube jdou videa s overlayem) – "
+                            "příprava pro YouTube vypnuta")
+            else:
+                yt_dir = Path(os.getenv("YOUTUBE_DIR")) if os.getenv("YOUTUBE_DIR") else (share or out) / "YouTube"
+                if not yt_dir.is_absolute():
+                    yt_dir = Path(__file__).resolve().parent / yt_dir
+        title = (os.getenv("YOUTUBE_TITLE") or "").strip() or DEFAULT_YT_TITLE
+        return cls(ffmpeg, out, quality, share, overlay, yt_dir, title, (os.getenv("YOUTUBE_LINK") or "").strip())
 
 
 def pick_stream_url(room_info: dict, quality: str) -> str | None:
@@ -319,8 +355,10 @@ class Recorder:
     díly na .mp4 (bezztrátově) a .ts smaže.
     """
 
-    def __init__(self, streamer: str, client, cfg: RecordConfig, room_id: str = ""):
+    def __init__(self, streamer: str, client, cfg: RecordConfig, room_id: str = "",
+                 stream_id: int | None = None, store: "Store | None" = None):
         self.streamer, self.client, self.cfg = streamer, client, cfg
+        self.stream_id, self.store = stream_id, store      # pro popis videa na YouTube (top dárci)
         self.proc: asyncio.subprocess.Process | None = None
         self.stopping = False
         self.parts: list[Path] = []
@@ -431,7 +469,8 @@ class Recorder:
             except Exception as ex:
                 log.warning("@%s: kopie událostí do sdílené složky selhala: %s", self.streamer, ex)
         if done and self.cfg.overlay and events.exists():
-            task = asyncio.create_task(render_overlays(self.streamer, done, events, self.cfg))
+            task = asyncio.create_task(render_overlays(self.streamer, done, events, self.cfg,
+                                                       self.store, self.stream_id))
             OVERLAY_TASKS.add(task)
             task.add_done_callback(OVERLAY_TASKS.discard)
 
@@ -466,8 +505,10 @@ OVERLAY_LOCK = asyncio.Lock()
 BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) if sys.platform == "win32" else 0
 
 
-async def render_overlays(streamer: str, videos: list[Path], events: Path, cfg: RecordConfig) -> None:
-    """Na pozadí (a se sníženou prioritou) vyrobí *_overlay.mp4 přes overlay.py – jedno video po druhém."""
+async def render_overlays(streamer: str, videos: list[Path], events: Path, cfg: RecordConfig,
+                          store: "Store | None" = None, stream_id: int | None = None) -> None:
+    """Na pozadí (a se sníženou prioritou) vyrobí *_overlay.mp4 přes overlay.py – jedno video po druhém.
+    S YOUTUBE_PREP=1 hotové video přesune do složky pro YouTube (+ .txt s názvem a popisem), s Telegramem pošle zprávu."""
     script = Path(__file__).resolve().with_name("overlay.py")
     async with OVERLAY_LOCK:
         for video in videos:
@@ -482,14 +523,241 @@ async def render_overlays(streamer: str, videos: list[Path], events: Path, cfg: 
                 _, err = await proc.communicate()
                 if proc.returncode != 0 or not out.exists():
                     log.warning("@%s: overlay se nepovedl: %s", streamer, err.decode(errors="replace")[-500:])
+                    notify(f"⚠️ <b>Video s overlayem se nepovedlo</b>\n@{tg_escape(streamer)} · "
+                                 f"<code>{tg_escape(video.name)}</code>\nPodrobnosti v logu sběrače.")
+                    continue
+                if cfg.youtube_dir:
+                    await prepare_youtube(streamer, video, out, cfg, store, stream_id)
                     continue
                 if cfg.share_dir:
                     dest = cfg.share_dir / streamer / out.name
                     await asyncio.to_thread(shutil.move, str(out), str(dest))
                     out = dest
                 log.info("@%s: video s overlayem hotové: %s", streamer, out)
+                notify(f"🎬 <b>Video s overlayem hotové</b>\n@{tg_escape(streamer)}\n"
+                             f"📁 <code>{tg_escape(str(out))}</code>")
             except Exception as ex:
                 log.warning("@%s: overlay %s selhal: %s", streamer, video.name, ex)
+                notify(f"⚠️ <b>Video s overlayem se nepovedlo</b>\n@{tg_escape(streamer)} · "
+                             f"<code>{tg_escape(video.name)}</code>\n{tg_escape(str(ex)[:300])}")
+
+
+# --------------------------------------------------------------------------
+# Příprava pro YouTube (YOUTUBE_PREP=1) – nahrává se ručně přes YouTube Studio
+# (automatický upload přes API z neověřeného projektu by video natrvalo zamkl jako soukromé)
+# --------------------------------------------------------------------------
+
+def fmt_int(n) -> str:
+    return f"{int(n or 0):,}".replace(",", " ")
+
+
+def fmt_duration(sec: float | None) -> str:
+    if not sec:
+        return "?"
+    s = int(round(sec))
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def yt_clean(text: str) -> str:
+    """YouTube nepovolí v názvu ani popisu znaky < a >."""
+    return str(text or "").replace("<", "‹").replace(">", "›")
+
+
+async def video_duration(ffmpeg: str, video: Path) -> float | None:
+    """Délka videa z výpisu `ffmpeg -i` (stačí ffmpeg, ffprobe není potřeba)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg, "-hide_banner", "-i", str(video), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
+        _, err = await proc.communicate()
+        for line in err.decode(errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("Duration:"):
+                h, m, s = line.split(",")[0].split()[1].split(":")
+                return int(h) * 3600 + int(m) * 60 + float(s)
+    except Exception as ex:
+        log.debug("délka videa %s: %s", video.name, ex)
+    return None
+
+
+def video_meta(video_stem: str) -> tuple[datetime | None, int]:
+    """Z názvu záznamu RRRR-MM-DD_HH-MM[_dilN] vytáhne začátek nahrávání a číslo dílu."""
+    base, part = video_stem, 1
+    if "_dil" in video_stem:
+        base, _, n = video_stem.rpartition("_dil")
+        part = int(n) if n.isdigit() else 1
+    try:
+        return datetime.strptime(base, "%Y-%m-%d_%H-%M"), part
+    except ValueError:
+        return None, part
+
+
+def youtube_title(template: str, streamer: str, start: datetime | None, part: int) -> str:
+    values = {"ucet": streamer, "datum": f"{start.day}. {start.month}. {start.year}" if start else "",
+              "cas": start.strftime("%H:%M") if start else "", "dil": str(part)}
+    try:
+        title = template.format_map(values)
+    except (KeyError, ValueError, IndexError) as ex:
+        log.warning("YOUTUBE_TITLE má chybu (%s) – použit výchozí název", ex)
+        title = DEFAULT_YT_TITLE.format_map(values)
+    if part > 1 and "{dil}" not in template:
+        title += f" (díl {part})"
+    return yt_clean(" ".join(title.split()))[:100]
+
+
+def youtube_description(streamer: str, start: datetime | None, part: int, duration: float | None,
+                        top: list[dict], totals: dict, link: str) -> str:
+    when = f" z {start.day}. {start.month}. {start.year} {start:%H:%M}" if start else ""
+    lines = [f"Záznam TikTok LIVE @{streamer}{when}" + (f", díl {part}" if part > 1 else "")
+             + (f" (délka {fmt_duration(duration)})." if duration else ".")]
+    if top:
+        lines += ["", "🏆 Top dárci vysílání:"]
+        for i, r in enumerate(top, 1):
+            nick, handle = (r.get("nickname") or "").strip(), r.get("unique_id") or r.get("user_id") or "?"
+            who = f"{nick} (@{handle})" if nick and nick != handle else f"@{handle}"
+            lines.append(f"{r.get('rank') or i}. {who} – {fmt_int(r.get('diamonds'))} mincí")
+        if totals.get("diamonds"):
+            lines += ["", f"Celkem {fmt_int(totals['diamonds'])} mincí od {fmt_int(totals.get('donors'))} dárců."]
+    if link:
+        lines += ["", f"Celý žebříček dárců: {link}"]
+    return yt_clean("\n".join(lines))[:4900]
+
+
+async def prepare_youtube(streamer: str, source: Path, rendered: Path, cfg: RecordConfig,
+                          store: "Store | None", stream_id: int | None) -> Path | None:
+    """Přesune hotové video s overlayem do YOUTUBE_DIR, uloží vedle něj .txt s názvem a popisem
+    a pošle upozornění na Telegram. Když něco selže, video zůstane, kde bylo (nic se neztratí)."""
+    start, part = video_meta(source.stem)
+    duration = await video_duration(cfg.ffmpeg, rendered)
+    size = f"{rendered.stat().st_size / 1e9:.2f} GB".replace(".", ",")
+    top, totals = [], {}
+    if store is not None and stream_id is not None:
+        try:
+            top, totals = await store.stream_top(streamer, stream_id)
+        except Exception as ex:
+            log.warning("@%s: top dárce pro popis videa se nepodařilo načíst: %s", streamer, ex)
+    title = youtube_title(cfg.youtube_title, streamer, start, part)
+    desc = youtube_description(streamer, start, part, duration, top, totals, cfg.youtube_link)
+    try:
+        cfg.youtube_dir.mkdir(parents=True, exist_ok=True)
+        dest = cfg.youtube_dir / f"{streamer}_{rendered.name}"
+        info = dest.with_suffix(".txt")
+        # .txt napřed – sync klient ho nahraje dřív než video, takže je u videa hned po jeho objevení
+        info.write_text(f"NÁZEV:\n{title}\n\nPOPIS:\n{desc}\n\n---\nSoubor: {dest.name}\n"
+                        f"Délka: {fmt_duration(duration)} · {size}\n", encoding="utf-8-sig")
+        await asyncio.to_thread(shutil.move, str(rendered), str(dest))
+    except Exception as ex:
+        log.warning("@%s: přesun videa do složky pro YouTube selhal (%s) – zůstává %s", streamer, ex, rendered)
+        notify(f"⚠️ <b>Video je hotové, ale přesun do složky pro YouTube selhal</b>\n"
+                     f"📁 <code>{tg_escape(str(rendered))}</code>\n{tg_escape(str(ex)[:300])}")
+        return None
+    log.info("@%s: video připravené k nahrání na YouTube: %s", streamer, dest)
+    when = f" · {start.day}. {start.month}. {start.year} {start:%H:%M}" if start else ""
+    notify(f"🎬 <b>Nové video k nahrání na YouTube</b>\n@{tg_escape(streamer)}{when}"
+                 f"{' · díl ' + str(part) if part > 1 else ''} · {fmt_duration(duration)} · {size}\n"
+                 f"📁 <code>{tg_escape(str(dest))}</code>\n\nNázev (klepnutím zkopíruješ):\n"
+                 f"<code>{tg_escape(title)}</code>",
+           f"Popis:\n<pre>{tg_escape(desc[:3500])}</pre>")
+    return dest
+
+
+# --------------------------------------------------------------------------
+# Telegram – upozornění (volitelné, TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)
+# --------------------------------------------------------------------------
+
+TELEGRAM_API = "https://api.telegram.org"
+
+
+def tg_escape(text: str) -> str:
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+class Telegram:
+    def __init__(self, token: str, chat_id: str):
+        self.token, self.chat_id = token, chat_id
+
+    @classmethod
+    def from_env(cls) -> "Telegram | None":
+        token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+        chat = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+        if token and not chat:
+            log.warning("TELEGRAM_BOT_TOKEN je vyplněný, ale chybí TELEGRAM_CHAT_ID – zjistíš ho: "
+                        "python tracker.py --telegram-test")
+        return cls(token, chat) if token and chat else None
+
+    async def send(self, html: str, retries: int = 3) -> bool:
+        """Pošle zprávu (HTML). Při výpadku sítě to zkusí znovu (po 10 s, 1 min, 5 min); selhání nevadí."""
+        delays = [10, 60, 300]
+        for attempt in range(retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=20) as http:
+                    r = await http.post(f"{TELEGRAM_API}/bot{self.token}/sendMessage",
+                                        json={"chat_id": self.chat_id, "text": html, "parse_mode": "HTML",
+                                              "disable_web_page_preview": True})
+                if r.status_code == 200:
+                    return True
+                err = f"HTTP {r.status_code}: {r.text[:200]}"
+                if r.status_code in (400, 401, 403, 404):   # špatný token / chat / text – opakování nepomůže
+                    log.warning("Telegram zprávu odmítl (%s)", err)
+                    return False
+            except Exception as ex:
+                err = f"{type(ex).__name__}: {ex}"
+            if attempt < retries:
+                await asyncio.sleep(delays[min(attempt, len(delays) - 1)])
+        log.warning("Zprávu na Telegram se nepodařilo poslat: %s", err)
+        return False
+
+
+TELEGRAM: Telegram | None = None
+
+
+def notify(*messages: str) -> None:
+    """Pošle zprávy na Telegram na pozadí (v daném pořadí) – nečeká se na ně, takže opakované pokusy
+    při výpadku sítě nezdržují další práci (např. výrobu dalšího videa)."""
+    if TELEGRAM is None or not messages:
+        return
+
+    async def _send() -> None:
+        for m in messages:
+            await TELEGRAM.send(m)
+
+    task = asyncio.create_task(_send())
+    BACKGROUND.add(task)
+    task.add_done_callback(BACKGROUND.discard)
+
+
+async def telegram_test() -> int:
+    """--telegram-test: bez TELEGRAM_CHAT_ID vypíše chaty, které botovi napsaly; s ním pošle zkušební zprávu."""
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        print("Chybí TELEGRAM_BOT_TOKEN v .env – bota založíš v Telegramu u @BotFather (/newbot).")
+        return 1
+    chat = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+    async with httpx.AsyncClient(timeout=20) as http:
+        if not chat:
+            r = await http.get(f"{TELEGRAM_API}/bot{token}/getUpdates")
+            if r.status_code != 200:
+                print(f"Telegram odmítl token (HTTP {r.status_code}): {r.text[:200]}")
+                return 1
+            chats = {}
+            for upd in r.json().get("result", []):
+                msg = upd.get("message") or upd.get("channel_post") or upd.get("my_chat_member") or {}
+                c = msg.get("chat") or {}
+                if c.get("id") is not None:
+                    chats[c["id"]] = c.get("title") or " ".join(
+                        x for x in (c.get("first_name"), c.get("last_name")) if x) or c.get("username") or ""
+            if not chats:
+                print("Bot zatím nemá žádnou zprávu. Otevři ho v Telegramu, pošli mu cokoli (např. /start) "
+                      "a spusť test znovu.")
+                return 1
+            print("Doplň do .env jeden z těchto řádků:")
+            for cid, name in chats.items():
+                print(f"  TELEGRAM_CHAT_ID={cid}    ({name})")
+            return 0
+    ok = await Telegram(token, chat).send("✅ Sběrač TikTok Giftboard: Telegram funguje, o nových videích "
+                                          "k nahrání ti dám vědět.", retries=0)
+    print("Zkušební zpráva odeslána." if ok else "Zprávu se nepodařilo poslat – viz chyba výše.")
+    return 0 if ok else 1
 
 
 # --------------------------------------------------------------------------
@@ -554,7 +822,8 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                 task.add_done_callback(BACKGROUND.discard)
                 log.info("@%s je LIVE (room %s) – sbírám dary", streamer, ev.room_id)
                 if rec_cfg and state["rec"] is None:
-                    state["rec"] = Recorder(streamer, client, rec_cfg, str(ev.room_id))
+                    state["rec"] = Recorder(streamer, client, rec_cfg, str(ev.room_id),
+                                            stream_id=state["stream_id"], store=store)
                     state["rec"].start()
 
             def rec_event(data: dict, ev=None) -> None:
@@ -685,10 +954,16 @@ async def run(usernames: list[str], interval: int) -> None:
         from TikTokLive.client.web.web_settings import WebDefaults
         WebDefaults.tiktok_sign_api_key = os.getenv("EULER_API_KEY")
 
+    global TELEGRAM
+    TELEGRAM = Telegram.from_env()
+    if TELEGRAM:
+        log.info("Upozornění na Telegram zapnuto")
     rec_cfg = RecordConfig.from_env()
     if rec_cfg:
         log.info("Nahrávání videa zapnuto → %s (kvalita %s)%s", rec_cfg.out_dir, rec_cfg.quality,
                  f", hotová MP4 se přesunou do {rec_cfg.share_dir}" if rec_cfg.share_dir else "")
+        if rec_cfg.youtube_dir:
+            log.info("Příprava pro YouTube zapnuta → videa s overlayem + popis do %s", rec_cfg.youtube_dir)
     store = Store(url, key, token)
     streamers = [norm(u) for u in usernames]
     try:
@@ -713,7 +988,11 @@ def main() -> None:
     p.add_argument("--interval", type=int, default=int(os.getenv("CHECK_INTERVAL", 60)),
                    help="jak často kontrolovat, jestli je účet LIVE (s)")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--telegram-test", action="store_true",
+                   help="ověří Telegram bota: vypíše TELEGRAM_CHAT_ID, nebo pošle zkušební zprávu")
     a = p.parse_args()
+    if a.telegram_test:
+        raise SystemExit(asyncio.run(telegram_test()))
 
     users = a.usernames or [u for u in os.getenv("STREAMERS", "").split(",") if u.strip()]
     if not users:

@@ -167,6 +167,22 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
   Jakub chce záznamy sdílet s dalším člověkem přes OneDrive/Google Drive (23. 11.); varianta „jen nahrávat bez
   Supabase klíče“ na druhém PC zatím neudělaná.
 
+## Příprava pro YouTube + Telegram (od 24. 11. 2026)
+- Automatický upload přes YouTube Data API zamítnut: videa z neověřeného API projektu jsou **zamčená jako soukromá**
+  (nejde změnit ani odvolat), veřejné jen po auditu. Jakub chce veřejná videa → ruční upload, sběrač jen připraví.
+- `YOUTUBE_PREP=1` (jen s `RECORD_OVERLAY=1`, jinak varování a vypnuto): v `render_overlays` po úspěšném overlayi
+  `prepare_youtube()` → `.txt` (UTF-8 BOM, název + popis) a přesun MP4 do `YOUTUBE_DIR` (výchozí `<share|out>/YouTube`)
+  jako `<účet>_<stem>_overlay.mp4`. Popis: top 10 + součty z RPC `leaderboard` / `leaderboard_totals` s `p_stream_id`
+  (veřejné RPC → funguje se secret klíčem i s tokenem). `Recorder` proto dostává `stream_id` a `store`.
+  Název `YOUTUBE_TITLE` (`{ucet} {datum} {cas} {dil}`), díl > 1 se přidá sám; znaky `< >` nahrazeny (YouTube je nepovolí),
+  název max 100 znaků. Délka z výpisu `ffmpeg -i`. Při chybě přesunu video zůstane na místě + Telegram varování.
+- Telegram: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, `sendMessage` s `parse_mode=HTML` (`tg_escape`), název v `<code>`
+  (klepnutím kopíruje), popis v `<pre>`. `notify()` posílá na pozadí (task v `BACKGROUND`), retry po 10 s / 1 min / 5 min,
+  4xx se neopakuje. Zprávy: video k nahrání, overlay hotový (bez YOUTUBE_PREP), overlay selhal.
+  `tracker.py --telegram-test`: bez chat id vypíše chaty z `getUpdates`, s ním pošle zkušební zprávu.
+- Otestováno v workspace: skutečný overlay.py + ffmpeg na testovacím videu (2 díly), mock PostgREST + Telegram API.
+  RPC s `p_stream_id` ověřeno přes Supabase MCP. **Na skutečném Telegramu / Google Drive zatím neověřeno.**
+
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.
 - Supabase Realtime místo pollingu každých 10 s.
