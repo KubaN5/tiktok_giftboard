@@ -71,9 +71,11 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 ## Aktuální stav
 - [x] Supabase schéma nasazené a otestované (RPC, RLS, dedup, granty service_role).
 - [x] Web nasazený. Hlavička webu: „Galerie hanby – Shopaholic Adel“ (commit `e7e411e`).
-- [ ] **Automatické nasazení z GitHubu nefunguje**: poslední deploy je z commitu `e4372cc` (23. 11. 13:38), novější pushe se
-  nenasadily. Zkontrolovat v Netlify → Project configuration → Build & deploy → Continuous deployment (propojení repa,
-  „Stop builds“, branch `main`), případně Deploys → Trigger deploy. Deploy přes Netlify MCP (`deploy-site`) Claudovi zamítá oprávnění.
+- [ ] **Netlify blokuje buildy z GitHubu**: „Build blocked: Unrecognized Git contributor. This plan allows only verified
+  account members to push to private repos.“ Free plán u soukromého repa sestaví jen commity od člena týmu s propojeným
+  GitHub účtem. Blokované jsou i commity `KubaN5 <KubaN5@users.noreply.github.com>` → GitHub `KubaN5` není propojený
+  s Netlify účtem. Commity od Clauda (autor „Claude“) projdou jen při veřejném repu nebo placeném plánu.
+  Poslední úspěšný deploy: `e4372cc` (spuštěný přes API, ne z gitu).
 - [x] Sběrač na Windows PC nainstalovaný a spuštěný, spojení se Supabase funguje („Hlídám: …“).
 - [ ] **Neověřeno na skutečném LIVE** – první vysílání účtu ukáže, jestli TikTokLive 7.0.1 a sign server fungují.
 - [ ] Běh na pozadí přes `install-task.ps1` zatím nezaregistrovaný.
