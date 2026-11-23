@@ -174,13 +174,45 @@ def gifts_from_db(streamer: str, t0: float, duration: float) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- tvary a odhad šířky textu
+NARROW, WIDE = set("ijlI.,:;!|'()[]{} f t"), set("mwMW@%")
+
+
+def text_w(s: str, fs: float, bold: bool = False) -> float:
+    """Hrubý odhad šířky textu v Arialu (bez fontu nejde změřit přesně) – stačí na velikost bubliny."""
+    w = 0.0
+    for ch in s:
+        if ch in NARROW:
+            w += 0.30
+        elif ch in WIDE:
+            w += 0.86
+        elif ch.isupper() or ch.isdigit():
+            w += 0.67
+        else:
+            w += 0.55
+    return w * fs * (1.08 if bold else 1.0)
+
+
+def rrect(w: float, h: float, r: float) -> str:
+    """Zaoblený obdélník jako ASS kresba."""
+    w, h = round(w), round(h)
+    r = max(0, min(round(r), w // 2, h // 2))
+    if r == 0:
+        return rect(w, h)
+    return (f"m {r} 0 l {w - r} 0 b {w} 0 {w} 0 {w} {r} l {w} {h - r} b {w} {h} {w} {h} {w - r} {h} "
+            f"l {r} {h} b 0 {h} 0 {h} 0 {h - r} l 0 {r} b 0 0 0 0 {r} 0")
+
+
+AVATAR_COLORS = ["&H7A5CFF&", "&HE0A33D&", "&H5BC86B&", "&HD86FD6&", "&H3FB3FF&", "&HB07BFF&", "&H6BD4F5&"]
+
+
 # ---------------------------------------------------------------- stavba titulků
 class Ass:
     def __init__(self, w: int, h: int):
         self.w, self.h, self.lines = w, h, []
         u = h / 1280 if h / w >= 1.4 else w / 720       # měřítko vůči 720×1280
         self.u = u
-        fs = round(30 * u)
+        o, s = max(1, round(2 * u)), max(1, round(1 * u))
         self.header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {w}
@@ -190,13 +222,10 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Toast,{FONT},{fs},&H00FFFFFF,&H00FFFFFF,&H70000000,&H00000000,0,0,0,0,100,100,0,0,3,{round(9*u)},0,1,0,0,0,1
-Style: Big,{FONT},{round(46*u)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,{round(3*u)},{round(2*u)},8,0,0,0,1
-Style: Comment,{FONT},{round(27*u)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,0,0,0,0,100,100,0,0,1,{max(1, round(2*u))},{max(1, round(1*u))},1,0,0,0,1
 Style: Shape,{FONT},10,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
-Style: Score,{FONT},{round(30*u)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,{round(2*u)},0,5,0,0,0,1
-Style: Timer,{FONT},{round(28*u)},&H00FFFFFF,&H00FFFFFF,&H90000000,&H00000000,1,0,0,0,100,100,0,0,3,{round(7*u)},0,8,0,0,0,1
-Style: Result,{FONT},{round(40*u)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,1,0,0,100,100,0,0,1,{round(3*u)},{round(2*u)},5,0,0,0,1
+Style: Text,{FONT},{round(24*u)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: Shadowed,{FONT},{round(24*u)},&H00FFFFFF,&H00FFFFFF,&H50000000,&H80000000,0,0,0,0,100,100,0,0,1,{o},{s},7,0,0,0,1
+Style: Big,{FONT},{round(44*u)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,{round(3*u)},{round(2*u)},5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -206,12 +235,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if end - start >= 0.02:
             self.lines.append((start, f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style},,0,0,0,,{text}"))
 
+    def shape(self, start, end, x, y, drawing, color, alpha="&H00&", layer=1, extra=""):
+        self.add(start, end, "Shape", rf"{{\an7\pos({round(x)},{round(y)})\p1\bord0\shad0\c{color}\1a{alpha}{extra}}}{drawing}",
+                 layer)
+
     def dump(self) -> str:
         return self.header + "\n".join(l for _, l in sorted(self.lines, key=lambda x: x[0])) + "\n"
 
 
 def build_gifts(ass: Ass, gifts: list[dict], vt) -> None:
-    """Dary seskupí do sérií (stejný dárce + dar), každá série = jedno oznámení s rostoucím xN."""
+    """Dary seskupí do sérií (stejný dárce + dar); každá série = bublina jako v TikToku s rostoucím xN."""
     combos: list[dict] = []
     open_: dict[tuple, dict] = {}
     for e in gifts:
@@ -224,59 +257,82 @@ def build_gifts(ass: Ass, gifts: list[dict], vt) -> None:
         count = int(e.get("count") or 1)
         if not c["steps"] or count != c["steps"][-1][1]:
             c["steps"].append((e["t"], count))
-        else:
-            c["steps"][-1] = (c["steps"][-1][0], count)
         c["last"] = e["t"]
         if not e.get("streak"):
             open_.pop(key, None)                        # série skončila
 
     u, h = ass.u, ass.h
+    ph, pad, av = round(62 * u), round(5 * u), round(52 * u)
+    fs_name, fs_sub, fs_cnt = round(23 * u), round(20 * u), round(48 * u)
     lane_free = [-1e9] * TOAST_LANES
-    lane_y = [h * 0.705 - i * 86 * u for i in range(TOAST_LANES)]
-    x = round(20 * u)
+    lane_y = [round(h * 0.575 - i * (ph + 12 * u)) for i in range(TOAST_LANES)]
+    x = round(14 * u)
     for c in sorted(combos, key=lambda c: c["steps"][0][0]):
         start, end = vt(c["steps"][0][0]), vt(c["last"]) + TOAST_HOLD
         lane = next((i for i in range(TOAST_LANES) if lane_free[i] <= start), None)
         if lane is None:
             lane = min(range(TOAST_LANES), key=lambda i: lane_free[i])
         lane_free[lane] = end
-        e = c["ev"]
-        who, gift = name_of(e), clean(e.get("gift"), 24) or "dárek"
+        e, y = c["ev"], lane_y[lane]
+        who, gift = name_of(e), clean(e.get("gift"), 22) or "dárek"
+        sub = f"poslal(a) {gift}"
+        pw = pad + av + round(10 * u) + max(text_w(who, fs_name, True), text_w(sub, fs_sub)) + round(20 * u)
+        col = AVATAR_COLORS[sum(map(ord, str(e.get("uid") or who))) % len(AVATAR_COLORS)]
+        fade = r"\fad(180,300)"
+        slide = rf"\move({x - 40},{y},{x},{y},0,180)"
+        # bublina, avatar s iniciálou, jméno a dar
+        ass.add(start, end, "Shape", rf"{{\an7{slide}\p1\bord0\shad0\c&H000000&\1a&H70&{fade}}}{rrect(pw, ph, ph / 2)}", 3)
+        ass.add(start, end, "Shape", rf"{{\an7\move({x - 40 + pad},{y + pad},{x + pad},{y + pad},0,180)\p1\bord0\shad0"
+                                     rf"\c{col}{fade}}}{rrect(av, av, av / 2)}", 4)
+        ass.add(start, end, "Text", rf"{{\an5\move({x - 40 + pad + av // 2},{y + ph // 2},{x + pad + av // 2},{y + ph // 2},0,180)"
+                                    rf"\b1\fs{round(26*u)}{fade}}}{(who[:1] or '?').upper()}", 5)
+        tx = x + pad + av + round(10 * u)
+        ass.add(start, end, "Text", rf"{{\an1\move({tx - 40},{y + ph // 2 + 1},{tx},{y + ph // 2 + 1},0,180)\b1\fs{fs_name}"
+                                    rf"{fade}}}{who}", 5)
+        ass.add(start, end, "Text", rf"{{\an7\move({tx - 40},{y + ph // 2 + round(3*u)},{tx},{y + ph // 2 + round(3*u)},0,180)"
+                                    rf"\fs{fs_sub}\c&HE6E6E6&{fade}}}{sub}", 5)
+        # xN vedle bubliny – při každém zvýšení „poskočí“
+        cx = round(x + pw + 10 * u)
         steps = c["steps"]
         for i, (t, count) in enumerate(steps):
             s = vt(t)
             nxt = vt(steps[i + 1][0]) if i + 1 < len(steps) else end
-            fade = r"\fad(150,0)" if i == 0 else ""
-            if i == len(steps) - 1:
-                fade = r"\fad(150,300)" if i == 0 else r"\fad(0,300)"
-            pop = rf"\t(0,120,\fscx125\fscy125)\t(120,240,\fscx100\fscy100)" if i > 0 else ""
-            text = (rf"{{\pos({x},{round(lane_y[lane])}){fade}}}{{\b1}}{who}{{\b0}}\N"
-                    rf"{{\fs{round(24*u)}\c{GREY}}}poslal(a) {gift}  "
-                    rf"{{\fs{round(40*u)}\b1\i1\c{GOLD}{pop}}}x{count}")
-            ass.add(s, nxt, "Toast", text, layer=3)
+            f = (r"\fad(120,0)" if i == 0 else "") + (r"\fad(0,300)" if i == len(steps) - 1 and i > 0 else "")
+            if i == 0 and len(steps) == 1:
+                f = r"\fad(120,300)"
+            pop = r"\fscx150\fscy150\t(0,160,\fscx100\fscy100)"
+            ass.add(s, nxt, "Shadowed", rf"{{\an4\pos({cx},{y + ph // 2})\b1\i1\fs{fs_cnt}\bord{round(3*u)}\3c&H552CFE&"
+                                        rf"\shad0{pop}{f}}}x{count}", 6)
         total = int(e.get("unit") or 0) * steps[-1][1]
         if total >= BIG_GIFT:
-            text = (rf"{{\pos({ass.w // 2},{round(h * 0.13)})\fad(200,400)\t(0,250,\fscx115\fscy115)"
-                    rf"\t(250,500,\fscx100\fscy100)}}{who}\N{{\c{GOLD}}}{gift} x{steps[-1][1]}"
-                    rf"{{\fs{round(28*u)}\c&HFFFFFF&}}\N{total} mincí")
-            ass.add(start, start + 4.0, "Big", text, layer=5)
+            text = (rf"{{\pos({ass.w // 2},{round(h * 0.36)})\fad(200,400)\fscx60\fscy60\t(0,250,\fscx110\fscy110)"
+                    rf"\t(250,450,\fscx100\fscy100)}}{who}\N{{\c{GOLD}}}{gift} x{steps[-1][1]}"
+                    rf"{{\fs{round(26*u)}\c&HFFFFFF&}}\N{total} mincí")
+            ass.add(start, start + 4.0, "Big", text, layer=7)
 
 
-def build_comments(ass: Ass, comments: list[dict], vt) -> None:
-    u, h = ass.u, ass.h
-    x, y = round(20 * u), round(h * 0.975)
+def build_comments(ass: Ass, comments: list[dict], vt, video_len: float) -> None:
+    if not comments:
+        return
+    u, w, h = ass.u, ass.w, ass.h
+    # jemný tmavý přechod dole (jako v aplikaci), ať jsou komentáře čitelné i přes světlý obraz
+    top = round(h * 0.70)
+    for k in range(10):
+        y = top + k * (h - top) // 10
+        ass.shape(0, video_len + 60, 0, y, rect(w, h - y), "&H000000&", "&HEE&", layer=0)
+    x, y, fs = round(16 * u), round(h * 0.972), round(24 * u)
     for i, e in enumerate(comments):
         start = vt(e["t"])
         end = vt(comments[i + 1]["t"]) if i + 1 < len(comments) else start + COMMENT_TTL
         end = min(end, start + COMMENT_TTL)
         shown = [c for c in comments[max(0, i - COMMENTS + 1): i + 1] if e["t"] - c["t"] <= COMMENT_TTL]
-        lines = [rf"{{\b1\c{GREY}}}{name_of(c)}{{\b0\c&HFFFFFF&}}  {clean(c.get('text'), 60) or '(emoji)'}"
+        lines = [rf"{{\b1\c&HC8C8C8&}}{name_of(c)}{{\b0\c&HFFFFFF&}}  {clean(c.get('text'), 48) or '(emoji)'}"
                  for c in shown]
-        ass.add(start, end, "Comment", rf"{{\pos({x},{y})}}" + r"\N".join(lines), layer=2)
+        ass.add(start, end, "Shadowed", rf"{{\an1\pos({x},{y})\fs{fs}}}" + r"\N".join(lines), layer=2)
 
 
 def our_side(events: list[dict], streamer: str) -> str | None:
-    """ID hostitelky v bitvě: z události 'owner', podle display_id soupeřů, nebo podle toho, čí skóre roste po našich darech."""
+    """ID hostitelky v bitvě: z události 'owner', podle display_id, nebo podle toho, čí skóre roste po našich darech."""
     for e in events:
         if e.get("type") == "owner" and e.get("id"):
             return str(e["id"])
@@ -298,12 +354,11 @@ def our_side(events: list[dict], streamer: str) -> str | None:
     return max(votes, key=votes.get) if votes else None
 
 
-def build_battles(ass: Ass, events: list[dict], vt, streamer: str, video_end: float) -> None:
-    ours = our_side(events, streamer)
+def parse_battles(events: list[dict]) -> list[dict]:
+    """Bitvy z událostí: {id, start, end_at, finish, scores:[(t,{aid:sc})], result} (časy = hodiny PC)."""
     st_offsets = [e["t"] - e["st"] / 1000 for e in events if e.get("st")]
     clock = statistics.median(st_offsets) if st_offsets else 0.0       # rozdíl hodin PC vs. TikTok
-
-    battles: list[dict] = []          # {id, start, end_at, finish, scores:[(t,{aid:sc})], result}
+    battles: list[dict] = []
     cur: dict | None = None
     finish_actions = ("FINISH", "LINK_MIC_BATTLE_BATTLE_ACTION_CUT_SHORT")
     for e in events:
@@ -314,8 +369,8 @@ def build_battles(ass: Ass, events: list[dict], vt, streamer: str, video_end: fl
                 continue                                # pozvánky, odmítnutí apod. pruh nezobrazí
             if cur is None or cur["id"] != bid:
                 start = e["t"]
-                if e.get("start_ms") and action in ("OPEN", "ACCEPT"):
-                    start = min(e["t"], e["start_ms"] / 1000 + clock) if clock else e["t"]
+                if e.get("start_ms") and action in ("OPEN", "ACCEPT") and clock:
+                    start = min(e["t"], e["start_ms"] / 1000 + clock)
                 cur = {"id": bid, "start": start, "end_at": None, "finish": None, "scores": [], "result": {}}
                 battles.append(cur)
             end_ms = e.get("end_ms") or ((e.get("start_ms") or 0) + 1000 * (e.get("duration") or 0))
@@ -331,64 +386,119 @@ def build_battles(ass: Ass, events: list[dict], vt, streamer: str, video_end: fl
                 cur = {"id": bid, "start": e["t"], "end_at": None, "finish": None, "scores": [], "result": {}}
                 battles.append(cur)
             cur["scores"].append((e["t"], dict(e["scores"])))
+    return battles
 
-    u, w = ass.u, ass.w
-    x0, y0, bw, bh = round(w * 0.03), round(ass.h * 0.035), round(w * 0.94), round(42 * u)
+
+def detect_layout(ffmpeg: str, video: Path, times: list[float], w: int, h: int) -> tuple[int, int, int, int] | None:
+    """Kde jsou v obraze okna bitvy (černé pruhy nad/pod nimi) – ffmpeg cropdetect v několika okamžicích bitvy."""
+    boxes = []
+    for t in times[:4]:
+        r = subprocess.run([ffmpeg, "-hide_banner", "-ss", f"{max(t, 0):.2f}", "-i", str(video), "-t", "2",
+                            "-vf", "cropdetect=limit=24:round=2:reset=0", "-f", "null", "-"],
+                           capture_output=True, text=True, errors="replace")
+        found = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", r.stderr)
+        if found:
+            cw, ch, cx, cy = map(int, found[-1])
+            if ch < h * 0.92 and cw > w * 0.6 and ch > h * 0.2:
+                boxes.append((cx, cy, cw, ch))
+    if not boxes:
+        return None
+    x0 = min(b[0] for b in boxes)
+    y0 = min(b[1] for b in boxes)
+    x1 = max(b[0] + b[2] for b in boxes)
+    y1 = max(b[1] + b[3] for b in boxes)
+    return x0, y0, x1 - x0, y1 - y0
+
+
+def battle_window(b: dict, nxt: dict | None, video_end: float) -> float:
+    if b["finish"]:
+        stop = b["finish"] + RESULT_HOLD
+    elif b["end_at"]:
+        stop = b["end_at"] + RESULT_HOLD
+    else:
+        stop = (b["scores"][-1][0] if b["scores"] else b["start"]) + 60
+    return min(stop, video_end, nxt["start"] if nxt is not None else stop)
+
+
+def build_battles(ass: Ass, battles: list[dict], ours: str | None, vt, video_end: float,
+                  layout: tuple[int, int, int, int] | None) -> None:
+    u, w, h = ass.u, ass.w, ass.h
+    bh = round(30 * u)
+    if layout:                                           # pruh přímo nad okny bitvy jako v aplikaci
+        bx, bw = layout[0], layout[2]
+        by = max(layout[1] - bh, 0)
+        panel_top = by + bh
+    else:
+        bx, bw, by = 0, w, round(h * 0.035)
+        panel_top = by + bh
+    fs = round(24 * u)
+    PINK_C, BLUE_C = "&H552CFE&", "&HF6B34F&"            # #FE2C55, #4FB3F6
     for i, b in enumerate(battles):
-        nxt = battles[i + 1]["start"] if i + 1 < len(battles) else None
-        if b["finish"]:
-            stop = b["finish"] + RESULT_HOLD
-        elif b["end_at"]:
-            stop = b["end_at"] + RESULT_HOLD
-        else:
-            stop = (b["scores"][-1][0] if b["scores"] else b["start"]) + 60
-        stop = min(stop, video_end, nxt if nxt is not None else stop)
-        # průběh skóre: (čas, naše, soupeř)
+        stop = battle_window(b, battles[i + 1] if i + 1 < len(battles) else None, video_end)
         timeline: list[tuple[float, int, int]] = [(b["start"], 0, 0)]
         for t, sc in b["scores"]:
             me = ours if ours in sc else (next(iter(sc)) if sc else None)
-            mine = sc.get(me, 0) if me else 0
-            other = sum(v for k, v in sc.items() if k != me)
-            timeline.append((t, mine, other))
+            timeline.append((t, sc.get(me, 0) if me else 0, sum(v for k, v in sc.items() if k != me)))
         if b["result"]:
             me = ours if ours in b["result"] else next(iter(b["result"]))
             timeline.append((b["finish"], b["result"].get(me, 0), sum(v for k, v in b["result"].items() if k != me)))
+        # pruh se skóre
         for j, (t, mine, other) in enumerate(timeline):
             s = vt(t)
             e = vt(timeline[j + 1][0]) if j + 1 < len(timeline) else vt(stop)
             if e <= s:
                 continue
-            frac = 0.5 if mine + other == 0 else min(max(mine / (mine + other), 0.07), 0.93)
+            frac = 0.5 if mine + other == 0 else min(max(mine / (mine + other), 0.08), 0.92)
             lw = round(bw * frac)
-            ass.add(s, e, "Shape", rf"{{\pos({x0},{y0})\p1\c{PINK}\1a&H10&}}{rect(lw, bh)}", layer=1)
-            ass.add(s, e, "Shape", rf"{{\pos({x0 + lw},{y0})\p1\c{BLUE}\1a&H10&}}{rect(bw - lw, bh)}", layer=1)
-            ass.add(s, e, "Score", rf"{{\an4\pos({x0 + round(12*u)},{y0 + bh // 2})}}" + num(mine), layer=2)
-            ass.add(s, e, "Score", rf"{{\an6\pos({x0 + bw - round(12*u)},{y0 + bh // 2})}}" + num(other), layer=2)
-        # odpočet
+            ass.shape(s, e, bx, by, rect(lw, bh), PINK_C)
+            ass.shape(s, e, bx + lw, by, rect(bw - lw, bh), BLUE_C)
+            ass.shape(s, e, bx + lw - round(2 * u), by, rect(round(4 * u), bh), "&HFFFFFF&", "&H50&", layer=2)
+            ass.add(s, e, "Shadowed", rf"{{\an4\pos({bx + round(10*u)},{by + bh // 2})\b1\fs{fs}\bord{max(1, round(1.5*u))}}}"
+                                      + num(mine), layer=3)
+            ass.add(s, e, "Shadowed", rf"{{\an6\pos({bx + bw - round(10*u)},{by + bh // 2})\b1\fs{fs}\bord{max(1, round(1.5*u))}}}"
+                                      + num(other), layer=3)
+        # pilulka s odpočtem (během bitvy) / „Vítězné kolo“ (po konci)
+        ph, cx = round(34 * u), bx + bw // 2
+
+        def pill(s0: float, s1: float, label: str) -> None:
+            pw = text_w(label, round(22 * u), True) + round(30 * u)
+            ass.shape(s0, s1, cx - pw / 2, panel_top, rrect(pw, ph, ph / 2), "&H000000&", "&H60&", layer=3)
+            ass.add(s0, s1, "Text", rf"{{\an5\pos({cx},{panel_top + ph // 2})\b1\fs{round(22*u)}}}{label}", layer=4)
+
+        end_at = min(x for x in (b["end_at"], b["finish"]) if x) if (b["end_at"] or b["finish"]) else None
         if b["end_at"]:
             t = b["start"]
-            end_at = min(b["end_at"], b["finish"] or b["end_at"])
             while t < end_at:
                 left = max(int(end_at - t + 0.999), 0)
-                ass.add(vt(t), vt(min(t + 1, end_at)), "Timer",
-                        rf"{{\pos({w // 2},{y0 + bh + round(8*u)})}}{left // 60:02d}:{left % 60:02d}", layer=2)
+                pill(vt(t), vt(min(t + 1, end_at)), f"{left // 60:02d}:{left % 60:02d}")
                 t += 1
-        # výsledek
         if b["finish"]:
+            pill(vt(b["finish"]), vt(stop), "Vítězné kolo")
             final = timeline[-1]
             if final[1] == final[2]:
-                labels = ("REMÍZA", "REMÍZA")
+                labels = ("DRAW", "DRAW")
             else:
-                labels = ("VÝHRA", "PROHRA") if final[1] > final[2] else ("PROHRA", "VÝHRA")
-            yy = y0 + bh + round(70 * u)
-            for k, (lab, xx) in enumerate(zip(labels, (x0 + bw // 4, x0 + 3 * bw // 4))):
-                col = GOLD if lab == "VÝHRA" else GREY
-                ass.add(vt(b["finish"]), vt(stop), "Result",
-                        rf"{{\pos({xx},{yy})\c{col}\fad(200,300)}}{lab}", layer=2)
+                labels = ("WIN", "LOSE") if final[1] > final[2] else ("LOSE", "WIN")
+            fsb, bdh = round(22 * u), round(32 * u)
+            by2 = (layout[1] + round(10 * u)) if layout else panel_top + ph + round(8 * u)
+            for k, lab in enumerate(labels):
+                bwid = text_w(lab, fsb, True) + round(24 * u)
+                xx = bx + round(10 * u) if k == 0 else bx + bw - round(10 * u) - bwid
+                col = GOLD if lab == "WIN" else "&HDDDDDD&"
+                ass.shape(vt(b["finish"]), vt(stop), xx, by2, rrect(bwid, bdh, bdh / 2), "&H202020&", "&H50&", layer=3,
+                          extra=r"\fad(200,300)")
+                ass.add(vt(b["finish"]), vt(stop), "Text",
+                        rf"{{\an5\pos({round(xx + bwid / 2)},{by2 + bdh // 2})\b1\i1\fs{fsb}\c{col}\fad(200,300)}}{lab}", 4)
+            # velký nápis uprostřed na pár sekund (jako animace v aplikaci)
+            big = "WIN" if labels[0] == "WIN" else ("DRAW" if labels[0] == "DRAW" else "LOSE")
+            ymid = (layout[1] + layout[3] // 2) if layout else h // 2
+            ass.add(vt(b["finish"]), vt(b["finish"]) + 3.0, "Big",
+                    rf"{{\pos({cx},{ymid})\fs{round(72*u)}\i1\c{GOLD if big == 'WIN' else '&HDDDDDD&'}"
+                    rf"\fscx40\fscy40\t(0,250,\fscx115\fscy115)\t(250,450,\fscx100\fscy100)\fad(100,400)}}{big}", 8)
 
 
 def build_ass(events: list[dict], t0: float, delay: float, w: int, h: int, duration: float,
-              offset: float = 0.0) -> str:
+              offset: float = 0.0, layout: tuple[int, int, int, int] | None = None) -> str:
     streamer = next((e.get("streamer") for e in events if e.get("type") == "meta"), "") or ""
     ass = Ass(w, h)
 
@@ -397,9 +507,21 @@ def build_ass(events: list[dict], t0: float, delay: float, w: int, h: int, durat
 
     video_end = t0 + duration if duration else max((e["t"] for e in events), default=t0)
     build_gifts(ass, [e for e in events if e.get("type") == "gift"], vt)
-    build_comments(ass, [e for e in events if e.get("type") == "comment"], vt)
-    build_battles(ass, events, vt, streamer, video_end)
+    build_comments(ass, [e for e in events if e.get("type") == "comment"], vt, vt(video_end))
+    build_battles(ass, parse_battles(events), our_side(events, streamer), vt, video_end, layout)
     return ass.dump()
+
+
+def battle_sample_times(events: list[dict], t0: float, delay: float, duration: float) -> list[float]:
+    """Okamžiky (v sekundách videa) uprostřed bitev – pro zjištění, kde jsou okna bitvy."""
+    out = []
+    for b in parse_battles(events):
+        end = b["finish"] or b["end_at"] or (b["scores"][-1][0] if b["scores"] else b["start"])
+        for frac in (0.3, 0.7):
+            v = b["start"] + (end - b["start"]) * frac - t0 + delay
+            if 0 <= v <= max(duration - 2, 0):
+                out.append(v)
+    return out
 
 
 # ---------------------------------------------------------------- CLI
@@ -444,10 +566,13 @@ def main() -> None:
 
     lead = min(2.0, a.frame) if a.frame is not None else 0.0
     offset = (a.frame - lead) if a.frame is not None else a.start
-    ass_text = build_ass(events, t0, a.delay, w, h, duration, offset=offset)
+    times = battle_sample_times(events, t0, a.delay, duration)
+    layout = detect_layout(ffmpeg, video, times, w, h) if times else None
+    ass_text = build_ass(events, t0, a.delay, w, h, duration, offset=offset, layout=layout)
     counts = {k: sum(1 for e in events if e.get("type") == k) for k in ("gift", "comment", "battle", "score")}
     print(f"Události: {counts['gift']} darů, {counts['comment']} komentářů, "
-          f"{counts['battle']} zpráv o bitvě, {counts['score']} změn skóre; video {w}×{h}, {duration/60:.1f} min")
+          f"{counts['battle']} zpráv o bitvě, {counts['score']} změn skóre; video {w}×{h}, {duration/60:.1f} min"
+          + (f"; okna bitvy {layout[2]}×{layout[3]} od y={layout[1]}" if layout else ""))
 
     suffix = "_overlay" if a.frame is None else f"_overlay_{int(a.frame)}s"
     out = (a.out or video.with_name(video.stem + suffix + (".png" if a.frame is not None else ".mp4"))).resolve()
