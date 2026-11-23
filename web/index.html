@@ -4,14 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎁</text></svg>">
-<title>Žebříček dárců – TikTok LIVE</title>
+<title>Galerie hanby – Shopaholic Adel</title>
 <style>
   :root { --bg:#0f1115; --card:#181b22; --line:#262a33; --fg:#e8eaed; --muted:#8b919c; --acc:#fe2c55; --acc2:#25f4ee; }
   * { box-sizing:border-box; }
   body { margin:0; font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
   header { padding:20px 20px 8px; max-width:900px; margin:auto; }
-  h1 { font-size:20px; margin:0 0 12px; }
-  h1 span { color:var(--acc); }
+  .hero { position:relative; overflow:hidden; text-align:center; padding:26px 16px 22px; margin-bottom:14px;
+          border-radius:14px; border:1px solid var(--line);
+          background:radial-gradient(120% 140% at 0% 0%, rgba(254,44,85,.28), transparent 55%),
+                     radial-gradient(120% 140% at 100% 100%, rgba(37,244,238,.22), transparent 55%), var(--card); }
+  .hero::before { content:""; position:absolute; inset:7px; border:1px dashed rgba(255,255,255,.14); border-radius:10px; pointer-events:none; }
+  .hero h1 { margin:0; font-size:clamp(30px, 7vw, 52px); line-height:1.05; font-weight:900; letter-spacing:.5px; text-transform:uppercase;
+             background:linear-gradient(90deg, var(--acc), #ff9bb0 50%, var(--acc2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .hero .sub { margin-top:8px; font-size:clamp(17px, 3.6vw, 24px); font-weight:700; color:#fff; }
+  .hero .sub::before, .hero .sub::after { content:"🛍️"; margin:0 8px; }
+  .hero .who { margin-top:10px; color:var(--muted); font-size:14px; }
+  .hero .who span { color:var(--fg); font-weight:600; }
   .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   select, button { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
   .tabs button.on { border-color:var(--acc); color:#fff; background:#2a1820; }
@@ -37,7 +46,11 @@
 </head>
 <body>
 <header>
-  <h1>🎁 Žebříček dárců <span id="who"></span></h1>
+  <div class="hero">
+    <h1>Galerie hanby</h1>
+    <div class="sub">Shopaholic Adel</div>
+    <div class="who">🎁 Žebříček dárců <span id="who"></span></div>
+  </div>
   <div class="bar">
     <select id="streamer"></select>
     <div class="tabs bar" id="tabs">
