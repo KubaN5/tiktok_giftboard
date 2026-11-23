@@ -134,6 +134,10 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
   zachycenému okamžiku (+15 s). Vlastník: RPC `close_streamer` (service_role), token: `collector_close_streamer`.
 - Web: RPC `stream_coverage(p_streamer, p_limit)` → u každého vysílání `total_seconds`, `missing_seconds`, `gaps`
   (≥ 60 s); karta „Výpadky sběru“ s časovou osou, ⚠️ ve výběru vysílání a upozornění nad žebříčkem. Migrace `collector_coverage`.
+- Karta i upozornění se řídí filtrem: konkrétní vysílání / Poslední LIVE = detail jednoho vysílání; 24 h / 7 dní /
+  30 dní / Celkem = souhrn za období (vysílání zasahující do období, bráno celé) + jen vysílání s výpadkem, ostatní
+  sbalená v `<details>`. Web načítá `p_limit: 2000` a filtruje období v prohlížeči (strop funkce 2000, migrace
+  `stream_coverage_limit_2000`).
 
 ## Odhad výdělku v Kč (od 23. 11. 2026)
 - Jen web: `USD_PER_COIN = 0.005` × kurz USD/CZK (`api.frankfurter.dev`, záložně 22,35) – dlaždice „Výdělek ≈“
