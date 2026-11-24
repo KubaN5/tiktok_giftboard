@@ -452,7 +452,7 @@ $("#q").addEventListener("input", e => {
 
 (async () => {
   const mail = CONTACT.join("@"); $("#mail").href = "mailto:" + mail; $("#mail").textContent = mail;
-  if (CFG.built) $("#ver").innerHTML = "<br>Poslední aktualizace: " + esc(CFG.built);
+  if (CFG.built) $("#ver").innerHTML = "<br>Poslední úprava webu: " + esc(CFG.built);
   if (!CFG.supabaseUrl || !CFG.supabaseKey) { showError("Chybí konfigurace Supabase (config.js)."); return; }
   trackView();
   try { await loadStreamers(); } catch (e) { showError(e.message); return; }
