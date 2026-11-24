@@ -199,6 +199,11 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
   („Non-monotonic DTS“). Oprava: obraz `setpts` – čas běží o skutečný rozdíl mezi snímky, nesmyslný skok (záporný,
   > 5 s, NaN) = +1/30 s; zvuk `aresample=48000,asetpts=N/SR/TB` (čas podle vzorků). Test ve workspace: video se skokem
   o ~35 dní (41264 s podle kontejneru) → výstup 65 s; běžné video beze změny délky.
+- Čtvrtý pokus: „Application provided duration: 16901409231 … invalid“ – `setpts` mění jen pts, ne `frame->duration`;
+  ffmpeg (fftools/ffmpeg_filter.c, VSYNC_VFR) bere délku snímku z dekodéru a libx264 ji předá do paketu.
+  Oprava: za setpts filtr `fps=30` (vf_fps.c nastavuje `frame->duration = 1`, pracuje jen s pts) a v setpts se
+  podezřele malé rozdíly (< 5 ms) berou taky jako skok. Novější ffmpeg ve workspace není (instalace zamítnuta),
+  ověřeno na ffmpeg 6.1: skok o 35 dní → 65 s / 1950 snímků, běžné video 60 s.
 
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.

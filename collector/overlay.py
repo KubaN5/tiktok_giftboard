@@ -697,10 +697,13 @@ def main() -> None:
         # Časové značky: záznam z TikToku umí uprostřed „resetovat hodiny“ (skok o dny, snímky bez pts, zvuk mírně
         # pozpátku) – přehrávač to přejde, ale kodér/muxer MP4 skončí chybou („Packet duration … out of range“).
         # Obraz: čas běží dál o skutečný rozdíl mezi snímky, nesmyslný skok (záporný, > 5 s, chybějící pts)
-        # se nahradí jedním snímkem (1/30 s). Zvuk: čas podle počtu vzorků (souvislý, bez skoků).
+        # nebo podezřele malý (< 5 ms) se nahradí jedním snímkem (1/30 s). Zvuk: čas podle počtu vzorků (souvislý, bez skoků).
         fix_pts = ("setpts='if(isnan(PREV_INPTS),PTS-STARTPTS,"
-                   "if(gt(PTS-PREV_INPTS,0)*lt(PTS-PREV_INPTS,5/TB),PREV_OUTPTS+PTS-PREV_INPTS,PREV_OUTPTS+1/(30*TB)))'")
-        vf = (f"{fix_pts},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
+                   "if(gt(PTS-PREV_INPTS,0.005/TB)*lt(PTS-PREV_INPTS,5/TB),PREV_OUTPTS+PTS-PREV_INPTS,PREV_OUTPTS+1/(30*TB)))'")
+        # fps=30: setpts mění jen čas snímku, ne jeho délku – a novější ffmpeg nesmyslnou délku z poškozeného snímku
+        # předá kodéru („Application provided duration … invalid“). Filtr fps skládá výstup jen podle času
+        # a každému snímku nastaví délku přesně 1/30 s (zároveň srovná proměnlivou snímkovou frekvenci TikToku).
+        vf = (f"{fix_pts},fps=30,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
               "setsar=1,ass=overlay.ass")
         cmd += ["-i", str(video), "-vf", vf]
         if a.frame is not None:
