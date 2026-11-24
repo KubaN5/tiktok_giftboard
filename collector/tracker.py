@@ -388,11 +388,14 @@ class Recorder:
         folder.mkdir(parents=True, exist_ok=True)
         failures = 0
         while not self.stopping and failures < 5:
-            try:
-                info = await self.client.web.fetch_room_info()
+            try:   # s limitem: při výpadku spojení dotaz visel donekonečna a záznam se nikdy nedokončil (24. 11.)
+                info = await asyncio.wait_for(self.client.web.fetch_room_info(), 30)
             except Exception as ex:
-                log.warning("@%s: nahrávání – nepodařilo se načíst info o vysílání: %s", self.streamer, ex)
+                log.warning("@%s: nahrávání – nepodařilo se načíst info o vysílání: %s: %s",
+                            self.streamer, type(ex).__name__, ex)
                 info = None
+            if self.stopping:
+                break
             if info is not None and info.get("status") == 4:           # 4 = vysílání skončilo
                 break
             if info is not None and not self.parts:                    # kdo je hostitel (strana v bitvě)
@@ -432,6 +435,7 @@ class Recorder:
             log.info("@%s: ffmpeg skončil (kód %s, %.1f MB)%s – zkusím navázat", self.streamer, code,
                      size / 1e6, (": " + " | ".join(tail)) if tail else "")
             await asyncio.sleep(5)
+        log.info("@%s: nahrávání skončilo, dokončuji záznam (%s díl/y)", self.streamer, len(self.parts))
         await self._finalize()
 
     async def stop(self) -> None:
