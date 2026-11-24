@@ -61,7 +61,44 @@ def clean(text: str | None, limit: int = 40) -> str:
         out.append(" " if cat.startswith("Z") or ch in "\r\n\t" else ch)
     s = re.sub(r"\s+", " ", "".join(out)).strip()
     s = s.replace("\\", "/").replace("{", "(").replace("}", ")")
+    for deco, repl in DECOR.items():          # ozdobné „srdíčko“ z cizího písma → ♥ (Arial ho má)
+        s = s.replace(deco, repl)
     return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
+
+
+# Znaky z exotických písem, které se v přezdívkách používají jako ozdoba (Arial je nemá → libass je nevykreslí
+# a zahltí výpis varováním „fontselect: failed to find any fallback with glyph …“).
+DECOR = {"ꨄ": "♥", "ᥫ᭡": "♥", "ᥫ": "♥", "᭡": ""}
+
+
+def run_ffmpeg(cmd: list[str], cwd: str) -> int:
+    """Spustí ffmpeg a jeho výpis propustí dál, jen opakovaná varování libass o chybějícím znaku v písmu
+    („fontselect: failed to find any fallback …“, chodí u každého snímku) vypíše jen jednou."""
+    proc = subprocess.Popen(cmd, cwd=cwd, stderr=subprocess.PIPE)
+    out = sys.stderr.buffer if hasattr(sys.stderr, "buffer") else None
+    seen: set[bytes] = set()
+    buf = b""
+    while True:
+        chunk = proc.stderr.read1(4096) if hasattr(proc.stderr, "read1") else proc.stderr.read(4096)
+        if not chunk:
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            if b"fontselect: failed to find any fallback" in line:
+                key = line.split(b"glyph", 1)[-1].strip()
+                if key in seen:
+                    continue
+                seen.add(key)
+                line += "  (znak se nevykreslí; další stejná varování skrývám)".encode()
+            if out:
+                out.write(line + b"\n"); out.flush()
+        if b"\r" in buf and out:                # průběžný stav (frame=… time=…) se přepisuje na jednom řádku
+            head, buf = buf.rsplit(b"\r", 1)
+            out.write(head + b"\r"); out.flush()
+    if buf and out:
+        out.write(buf); out.flush()
+    return proc.wait()
 
 
 def name_of(ev: dict) -> str:
@@ -719,9 +756,9 @@ def main() -> None:
                     "-af", "aresample=48000,asetpts=N/SR/TB", "-c:a", "aac", "-b:a", "160k", "-ac", "2",
                     "-movflags", "+faststart", str(out)]
         print("Vyrábím:", out)
-        r = subprocess.run(cmd, cwd=tmp)
-        if r.returncode != 0:
-            sys.exit(f"ffmpeg skončil s chybou {r.returncode}")
+        code = run_ffmpeg(cmd, tmp)
+        if code != 0:
+            sys.exit(f"ffmpeg skončil s chybou {code}")
     print("Hotovo:", out)
 
 

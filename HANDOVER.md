@@ -207,6 +207,9 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Pátý pokus doběhl, ale ve výpisu stálo `frame=1124` od 0:37 do 1:15 a `drop` 8 → 1140 (≈ 38 s obrazu zahozeno).
   Příčina: první snímek se poznával přes `isnan(PREV_INPTS)` – po snímku bez pts je PREV_INPTS NaN a výraz se vrátil
   na původní (rozbitý, o 38 s pozadu) čas. Oprava: první snímek = `eq(N,0)`.
+- Výpis zaplavilo „fontselect: failed to find any fallback with glyph 0xAA04 for font: (Arial, 700, 0)“ (libass, u každého
+  snímku) – ozdobné „srdíčko“ ꨄ z písma Cham v přezdívce/komentáři. `clean()` nahrazuje ꨄ / ᥫ᭡ → ♥ (`DECOR`),
+  `run_ffmpeg()` propouští výpis ffmpeg a stejné fontselect varování ukáže jen jednou.
 
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.
