@@ -230,3 +230,12 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - `leaderboard` vrací navíc `avatar_ver` (epoch `avatars.updated_at`); web: 
   `<SUPABASE_URL>/storage/v1/object/public/avatars/<user_id>?v=<avatar_ver>`, při chybě načtení zůstane písmeno.
 - Migrace `donor_avatars` (tabulka, bucket 512 KB, image/*; leaderboard drop + create kvůli novému sloupci).
+
+## Největší dar + obrázky darů (od 24. 11. 2026)
+- Dlaždice „Největší dar“ (vedle „Vysílání“, na mobilu přes celou šířku): RPC `top_gift(p_streamer, p_period, p_stream_id)`
+  = nejdražší jednotlivý řádek `gifts` (série = jeden dar, „Rose ×99“); vrací i `gift_id`, `image_ver`.
+- Obrázky darů: sběrač u daru vezme `ev.gift.image/icon.url_list[0]` (`gift_image_url()`), uloží do veřejného bucketu
+  **`gifts`** jako `gifts/<gift_id>` a upsertne `public.gift_images(gift_id, updated_at)` – na dar nejvýš 1× za týden a běh.
+  Společná fronta s profilovkami: `Store.add_image(kind, key, src)` + `Store.image_worker()` (`IMAGE_KINDS`).
+  Log: „Obrázek daru … uložen“ / „… se nepodařilo uložit“ (první za běh). Web: bez obrázku 🎁.
+- Migrace `top_gift`, `gift_images`.

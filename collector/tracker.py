@@ -56,6 +56,14 @@ HEARTBEAT_EVERY = 30   # s; web považuje sběrač za offline po 2 min bez zprá
 LIVE: set[str] = set()        # účty, jejichž LIVE právě sbíráme
 RECORDING: set[str] = set()   # účty, jejichž LIVE právě nahráváme
 AVATAR_REFRESH = 24 * 3600    # s; profilovku dárce obnovit nejvýš jednou za den (za běh sběrače)
+GIFT_IMAGE_REFRESH = 7 * 24 * 3600   # s; obrázek daru se skoro nemění – stačí jednou za běh / týden
+# Obrázky ukládané do Supabase Storage: druh -> (bucket, tabulka, klíčový sloupec, (log úspěch, log chyba), obnova)
+IMAGE_KINDS = {
+    "avatar": ("avatars", "/avatars", "user_id",
+               ("Profilovka dárce %s uložena", "Profilovku dárce %s se nepodařilo uložit"), AVATAR_REFRESH),
+    "gift":   ("gifts", "/gift_images", "gift_id",
+               ("Obrázek daru %s uložen", "Obrázek daru %s se nepodařilo uložit"), GIFT_IMAGE_REFRESH),
+}
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
@@ -83,10 +91,10 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def avatar_url(user) -> str | None:
-    """Adresa profilové fotky z uživatele u daru (TikTokLive 7: avatar_*.url_list; starší názvy jako záloha)."""
-    for attr in ("avatar_medium", "avatar_thumb", "avatar_large", "profile_picture"):
-        img = getattr(user, attr, None)
+def image_url(obj, attrs: tuple[str, ...]) -> str | None:
+    """První http adresa z prvního vyplněného obrázku (ImageModel.url_list; starší názvy jako záloha)."""
+    for attr in attrs:
+        img = getattr(obj, attr, None)
         if img is None:
             continue
         for list_attr in ("url_list", "m_urls", "url", "urls"):
@@ -94,6 +102,16 @@ def avatar_url(user) -> str | None:
                 if isinstance(u, str) and u.startswith("http"):
                     return u
     return None
+
+
+def avatar_url(user) -> str | None:
+    """Adresa profilové fotky dárce (TikTokLive 7: avatar_medium / avatar_thumb)."""
+    return image_url(user, ("avatar_medium", "avatar_thumb", "avatar_large", "profile_picture"))
+
+
+def gift_image_url(gift) -> str | None:
+    """Adresa obrázku daru (TikTokLive 7: Gift.image / icon)."""
+    return image_url(gift, ("image", "icon", "preview_image"))
 
 
 # --------------------------------------------------------------------------
@@ -115,12 +133,12 @@ class Store:
         self.http = httpx.AsyncClient(base_url=url.rstrip("/") + "/rest/v1",
                                       headers=headers, timeout=20)
         self.queue: asyncio.Queue[dict] = asyncio.Queue()
-        # Profilovky dárců -> Supabase Storage (bucket avatars). Jen se secret klíčem; tokenový sběrač je přeskočí.
+        # Profilovky dárců a obrázky darů -> Supabase Storage (buckety avatars, gifts). Jen se secret klíčem.
         self.storage = httpx.AsyncClient(base_url=url.rstrip("/") + "/storage/v1", timeout=30,
                                          headers={"apikey": key, "Authorization": f"Bearer {key}"})
-        self.avatar_q: asyncio.Queue[tuple[str, str]] = asyncio.Queue(maxsize=500)
-        self.avatar_done: dict[str, float] = {}   # user_id -> kdy naposledy (i neúspěšně) zpracováno
-        self.avatar_logged = {"ok": False, "err": False}   # do logu jen první úspěch / první chybu za běh
+        self.image_q: asyncio.Queue[tuple[str, str, str]] = asyncio.Queue(maxsize=500)   # (druh, klíč, adresa)
+        self.image_done: dict[tuple[str, str], float] = {}   # (druh, klíč) -> kdy naposledy (i neúspěšně) zpracováno
+        self.image_logged: set[str] = set()                   # do logu jen první úspěch / chyba za druh a běh
 
     async def _req(self, method: str, path: str, **kw) -> httpx.Response:
         r = await self.http.request(method, path, **kw)
@@ -212,49 +230,55 @@ class Store:
         row.setdefault("ts", now_iso())
         self.queue.put_nowait(row)
 
-    def add_avatar(self, user_id: str, src: str | None) -> None:
-        """Naplánuje stažení profilovky dárce (nejvýš jednou za AVATAR_REFRESH na dárce)."""
-        if self.token or not src or not user_id:
+    def add_image(self, kind: str, key, src: str | None) -> None:
+        """Naplánuje stažení obrázku (profilovka / dar) – nejvýš jednou za dobu obnovy daného druhu."""
+        if self.token or not src or key in (None, "", 0):
             return
-        last = self.avatar_done.get(user_id)
-        if last and time.time() - last < AVATAR_REFRESH:
+        key = str(key)
+        refresh = IMAGE_KINDS[kind][4]
+        last = self.image_done.get((kind, key))
+        if last and time.time() - last < refresh:
             return
-        self.avatar_done[user_id] = time.time()
+        self.image_done[(kind, key)] = time.time()
         try:
-            self.avatar_q.put_nowait((user_id, src))
+            self.image_q.put_nowait((kind, key, src))
         except asyncio.QueueFull:
-            self.avatar_done.pop(user_id, None)
+            self.image_done.pop((kind, key), None)
 
-    async def avatar_worker(self) -> None:
-        """Na pozadí stáhne fotku z TikToku a uloží ji do Supabase (avatars/<user_id>) – odkazy TikToku
-        po pár dnech vyprší, uložená kopie ne. Selhání nevadí: zkusí se znovu při dalším daru (za 10 min+)."""
+    def add_avatar(self, user_id: str, src: str | None) -> None:
+        self.add_image("avatar", user_id, src)
+
+    async def image_worker(self) -> None:
+        """Na pozadí stáhne obrázek z TikToku a uloží ho do Supabase (<bucket>/<klíč>) – odkazy TikToku
+        po čase vyprší, uložená kopie ne. Selhání nevadí: zkusí se znovu při dalším daru (za 10 min+)."""
         if self.token:
             return
         async with httpx.AsyncClient(timeout=20, follow_redirects=True,
                                      headers={"User-Agent": BROWSER_UA}) as dl:
             while True:
-                uid, src = await self.avatar_q.get()
+                kind, key, src = await self.image_q.get()
+                bucket, table, col, label, refresh = IMAGE_KINDS[kind]
                 try:
                     r = await dl.get(src)
                     ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
                     if r.status_code != 200 or not ctype.startswith("image/") or not 0 < len(r.content) <= 500_000:
                         raise RuntimeError(f"stažení: HTTP {r.status_code}, {ctype or '?'}, {len(r.content)} B")
-                    up = await self.storage.post(f"/object/avatars/{uid}", content=r.content,
+                    up = await self.storage.post(f"/object/{bucket}/{key}", content=r.content,
                                                  headers={"Content-Type": ctype, "x-upsert": "true",
                                                           "cache-control": "max-age=604800"})
                     if up.status_code >= 400:
                         raise RuntimeError(f"úložiště {up.status_code}: {up.text[:200]}")
-                    await self._req("POST", "/avatars", params={"on_conflict": "user_id"},
+                    await self._req("POST", table, params={"on_conflict": col},
                                     headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-                                    json={"user_id": uid, "updated_at": now_iso()})
-                    log.log(logging.DEBUG if self.avatar_logged["ok"] else logging.INFO,
-                            "Profilovka dárce %s uložena (%s B)", uid, len(r.content))
-                    self.avatar_logged["ok"] = True
+                                    json={col: int(key) if col == "gift_id" else key, "updated_at": now_iso()})
+                    first = f"{kind}:ok" not in self.image_logged
+                    log.log(logging.INFO if first else logging.DEBUG, label[0] + " (%s B)", key, len(r.content))
+                    self.image_logged.add(f"{kind}:ok")
                 except Exception as ex:
-                    log.log(logging.DEBUG if self.avatar_logged["err"] else logging.WARNING,
-                            "Profilovku dárce %s se nepodařilo uložit: %s", uid, ex)
-                    self.avatar_logged["err"] = True
-                    self.avatar_done[uid] = time.time() - AVATAR_REFRESH + 600   # další pokus nejdřív za 10 min
+                    first = f"{kind}:err" not in self.image_logged
+                    log.log(logging.WARNING if first else logging.DEBUG, label[1] + ": %s", key, ex)
+                    self.image_logged.add(f"{kind}:err")
+                    self.image_done[(kind, key)] = time.time() - refresh + 600   # další pokus nejdřív za 10 min
 
     async def writer(self) -> None:
         """Na pozadí posílá dary po dávkách; při chybě to zkusí znovu."""
@@ -973,8 +997,9 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                          count, ev.gift.name, diamonds)
                 try:
                     store.add_avatar(str(ev.user.id), avatar_url(ev.user))
+                    store.add_image("gift", ev.gift.id, gift_image_url(ev.gift))
                 except Exception as ex:
-                    log.debug("profilovka: %s", ex)
+                    log.debug("obrázky k daru: %s", ex)
 
             client.add_listener(LiveEndEvent, finish)
             client.add_listener(DisconnectEvent, finish)
@@ -1043,7 +1068,7 @@ async def run(usernames: list[str], interval: int) -> None:
         log.info("Přihlášen tokenem jako sběrač „%s“", token_name)
     log.info("Hlídám: %s (kontrola každých %ss)", ", ".join("@" + s for s in streamers), interval)
     name = token_name or (os.getenv("COLLECTOR_NAME") or socket.gethostname() or "sběrač").strip()[:60]
-    await asyncio.gather(store.writer(), store.avatar_worker(), store.heartbeat(name, streamers, bool(rec_cfg)),
+    await asyncio.gather(store.writer(), store.image_worker(), store.heartbeat(name, streamers, bool(rec_cfg)),
                          weekly_visits_report(store),
                          *(watch(s, store, interval, rec_cfg) for s in streamers))
 

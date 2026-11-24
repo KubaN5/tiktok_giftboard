@@ -86,6 +86,20 @@ values ('avatars', 'avatars', true, 524288,
 on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit,
                                allowed_mime_types = excluded.allowed_mime_types;
 
+-- Obrázky darů (růže, labuť…): sběrač je při prvním výskytu daru za běh uloží do veřejného bucketu gifts
+-- jako gifts/<gift_id>; tabulka gift_images říká, který dar obrázek má (web podle updated_at mění ?v=).
+create table if not exists public.gift_images (
+    gift_id    bigint primary key,
+    updated_at timestamptz not null default now()
+);
+alter table public.gift_images enable row level security;
+grant select, insert, update on public.gift_images to service_role;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('gifts', 'gifts', true, 524288,
+        array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/heic'])
+on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit,
+                               allowed_mime_types = excluded.allowed_mime_types;
+
 -- ---------------------------------------------------------------- funkce pro web
 -- Ve výběru jen účty s nějakým vysíláním, nebo hlídané sběračem aktivním za posledních 30 dní
 -- (překlep v STREAMERS po opravě a restartu sběrače sám zmizí).
@@ -180,13 +194,14 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- Největší jednotlivý dar v období / vysílání (série růží = jeden dar s count > 1)
+drop function if exists public.top_gift(text, text, bigint);   -- nové návratové sloupce (gift_id, image_ver)
 create or replace function public.top_gift(
     p_streamer  text,
     p_period    text   default 'all',
     p_stream_id bigint default null
 )
 returns table (diamonds integer, gift_name text, count integer, user_id text, unique_id text, nickname text,
-               ts timestamptz)
+               ts timestamptz, gift_id bigint, image_ver bigint)
 language sql stable security definer set search_path = public as $$
     with params as (
         select lower(ltrim(p_streamer, '@')) as streamer,
@@ -204,8 +219,10 @@ language sql stable security definer set search_path = public as $$
                    when '30d' then now() - interval '30 days'
                end as since
     )
-    select g.diamonds, g.gift_name, g.count, g.user_id, g.unique_id, g.nickname, g.ts
-    from gifts g, params p
+    select g.diamonds, g.gift_name, g.count, g.user_id, g.unique_id, g.nickname, g.ts,
+           g.gift_id, extract(epoch from gi.updated_at)::bigint
+    from gifts g cross join params p
+    left join gift_images gi on gi.gift_id = g.gift_id
     where g.streamer = p.streamer
       and (p.stream_id is null or g.stream_id = p.stream_id)
       and (p.stream_id is not null or p.since is null or g.ts >= p.since)

@@ -41,6 +41,8 @@
   .stat-top { min-width:170px; } .stat-top b { display:flex; align-items:center; gap:5px; }
   .stat-top .sub { display:block; color:var(--muted); font-size:12px; margin-top:1px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .stat-top .sub a { color:var(--fg); text-decoration:none; }
+  .stat-top .gico { width:28px; height:28px; display:inline-grid; place-items:center; font-size:20px; margin-right:2px; }
+  .stat-top .gico img { width:100%; height:100%; object-fit:contain; }
   table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
   th, td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); }
   th { color:var(--muted); font-weight:500; font-size:13px; }
@@ -139,7 +141,7 @@
     <div class="stat" title="Odhad: tvůrce dostane zhruba polovinu ceny daru (~0,005 USD za minci), před daní a poplatky"><small>Výdělek ≈</small><b id="s-k">0 Kč</b></div>
     <div class="stat"><small>Dárců</small><b id="s-u">0</b></div>
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
-    <div class="stat stat-top" title="Nejdražší jednotlivý dar ve zvoleném období (série darů = jeden dar)"><small>🎁 Největší dar</small><b id="s-g">–</b><span class="sub" id="s-gi"></span></div>
+    <div class="stat stat-top" title="Nejdražší jednotlivý dar ve zvoleném období (série darů = jeden dar)"><small>Největší dar</small><b id="s-g">–</b><span class="sub" id="s-gi"></span></div>
   </div>
   <div class="gapnote" id="gapnote"></div>
   <div class="podium" id="podium"></div>
@@ -388,7 +390,11 @@ async function refresh() {
     $("#s-u").textContent = fmt(donors);
     $("#s-s").textContent = fmt(streamId || period === "last" ? Math.min(1, streams.length) : streams.length);
     const tg = topArr[0];   // největší jednotlivý dar
-    $("#s-g").innerHTML = tg ? `<i class="coin" aria-hidden="true"></i>${fmt(tg.diamonds)}` : "–";
+    const gimg = tg && tg.image_ver
+      ? `<img src="${CFG.supabaseUrl}/storage/v1/object/public/gifts/${encodeURIComponent(tg.gift_id)}?v=${tg.image_ver}" alt="" onerror="this.replaceWith('🎁')">`
+      : "🎁";
+    const gHtml = tg ? `<span class="gico">${gimg}</span><i class="coin" aria-hidden="true"></i>${fmt(tg.diamonds)}` : "–";
+    if ($("#s-g").dataset.h !== gHtml) { $("#s-g").innerHTML = gHtml; $("#s-g").dataset.h = gHtml; }   // obrázek neblikat
     $("#s-gi").innerHTML = tg ? `${esc(tg.gift_name || "dar")}${tg.count > 1 ? " ×" + fmt(tg.count) : ""} · ${tg.unique_id
         ? `<a href="https://www.tiktok.com/@${encodeURIComponent(tg.unique_id)}" target="_blank" rel="noopener noreferrer">@${esc(tg.unique_id)}</a>`
         : "@" + esc(tg.user_id)}` : "";
