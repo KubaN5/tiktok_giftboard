@@ -38,6 +38,9 @@
   .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 14px; min-width:130px; }
   .stat b { display:block; font-size:20px; }
   .stat small { color:var(--muted); }
+  .stat-top { min-width:170px; } .stat-top b { display:flex; align-items:center; gap:5px; }
+  .stat-top .sub { display:block; color:var(--muted); font-size:12px; margin-top:1px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .stat-top .sub a { color:var(--fg); text-decoration:none; }
   table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
   th, td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); }
   th { color:var(--muted); font-weight:500; font-size:13px; }
@@ -87,7 +90,7 @@
   .pager button.on { border-color:var(--acc); color:var(--fg); background:rgba(254,44,85,.15); font-weight:700; }
   .pager button:disabled { opacity:.35; cursor:default; }
   .pager .gap { padding:0 2px; }
-  @media (max-width:560px) { .hide-sm { display:none; } .stats { display:grid; grid-template-columns:1fr 1fr; } .stat { min-width:0; padding:8px 10px; } .stat b { white-space:nowrap; } .stat b { font-size:17px; } th, td { padding:9px 8px; } header, main { padding-left:12px; padding-right:12px; } }
+  @media (max-width:560px) { .hide-sm { display:none; } .stats { display:grid; grid-template-columns:1fr 1fr; } .stat { min-width:0; padding:8px 10px; } .stat b { white-space:nowrap; } .stat b { font-size:17px; } .stat-top { grid-column:1 / -1; } .stat-top .sub { max-width:none; } th, td { padding:9px 8px; } header, main { padding-left:12px; padding-right:12px; } }
   footer { color:var(--muted); font-size:12px; text-align:center; padding-bottom:64px; }   /* místo pro odznak Netlify */
   footer .meta a { color:var(--muted); }
   .gapnote { display:none; margin:0 0 12px; padding:10px 14px; border-radius:10px; background:#2a1a12; border:1px solid #7a4a1f; color:#ffcf9a; font-size:14px; }
@@ -136,6 +139,7 @@
     <div class="stat" title="Odhad: tvůrce dostane zhruba polovinu ceny daru (~0,005 USD za minci), před daní a poplatky"><small>Výdělek ≈</small><b id="s-k">0 Kč</b></div>
     <div class="stat"><small>Dárců</small><b id="s-u">0</b></div>
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
+    <div class="stat stat-top" title="Nejdražší jednotlivý dar ve zvoleném období (série darů = jeden dar)"><small>🎁 Největší dar</small><b id="s-g">–</b><span class="sub" id="s-gi"></span></div>
   </div>
   <div class="gapnote" id="gapnote"></div>
   <div class="podium" id="podium"></div>
@@ -371,9 +375,10 @@ async function refresh() {
     $("#who").innerHTML = "@" + esc(s) + (live ? '<span class="live">LIVE</span>' : "");
     const my = ++seq;      // starší odpověď (pomalá síť) nesmí přepsat novější
     const args = { p_streamer: s, p_period: period, p_stream_id: streamId ? Number(streamId) : null };
-    const [rows, totArr] = await Promise.all([
+    const [rows, totArr, topArr] = await Promise.all([
       rpc("leaderboard", { ...args, p_limit: query ? PAGE : Math.min(start + shown, 5000), p_search: query || null }),
-      rpc("leaderboard_totals", args)
+      rpc("leaderboard_totals", args),
+      rpc("top_gift", args).catch(() => [])
     ]);
     if (my !== seq) return;
     const tot = totArr[0] || { diamonds: 0, gifts: 0, donors: 0, top_diamonds: 0 };
@@ -382,6 +387,11 @@ async function refresh() {
     $("#s-k").textContent = czk(tot.diamonds);
     $("#s-u").textContent = fmt(donors);
     $("#s-s").textContent = fmt(streamId || period === "last" ? Math.min(1, streams.length) : streams.length);
+    const tg = topArr[0];   // největší jednotlivý dar
+    $("#s-g").innerHTML = tg ? `<i class="coin" aria-hidden="true"></i>${fmt(tg.diamonds)}` : "–";
+    $("#s-gi").innerHTML = tg ? `${esc(tg.gift_name || "dar")}${tg.count > 1 ? " ×" + fmt(tg.count) : ""} · ${tg.unique_id
+        ? `<a href="https://www.tiktok.com/@${encodeURIComponent(tg.unique_id)}" target="_blank" rel="noopener noreferrer">@${esc(tg.unique_id)}</a>`
+        : "@" + esc(tg.user_id)}` : "";
     $("#qinfo").textContent = query ? (rows.length >= PAGE ? `prvních ${PAGE}` : `nalezeno ${rows.length}`) : "";
     if (!query && start && start >= rows.length) start = Math.max(0, Math.floor((rows.length - 1) / PAGE) * PAGE);  // ubylo dárců
     const view = query ? rows : rows.slice(start);       // stránka žebříčku (pódium bere top 3 z celých dat)

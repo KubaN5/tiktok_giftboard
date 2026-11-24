@@ -179,6 +179,40 @@ language sql stable security definer set search_path = public as $$
     limit least(greatest(p_limit, 1), 5000);
 $$;
 
+-- Největší jednotlivý dar v období / vysílání (série růží = jeden dar s count > 1)
+create or replace function public.top_gift(
+    p_streamer  text,
+    p_period    text   default 'all',
+    p_stream_id bigint default null
+)
+returns table (diamonds integer, gift_name text, count integer, user_id text, unique_id text, nickname text,
+               ts timestamptz)
+language sql stable security definer set search_path = public as $$
+    with params as (
+        select lower(ltrim(p_streamer, '@')) as streamer,
+               coalesce(
+                   p_stream_id,
+                   case when p_period = 'last' then
+                       coalesce((select id from streams
+                                 where streamer = lower(ltrim(p_streamer, '@'))
+                                 order by started_at desc limit 1), -1)
+                   end
+               ) as stream_id,
+               case p_period
+                   when '24h' then now() - interval '24 hours'
+                   when '7d'  then now() - interval '7 days'
+                   when '30d' then now() - interval '30 days'
+               end as since
+    )
+    select g.diamonds, g.gift_name, g.count, g.user_id, g.unique_id, g.nickname, g.ts
+    from gifts g, params p
+    where g.streamer = p.streamer
+      and (p.stream_id is null or g.stream_id = p.stream_id)
+      and (p.stream_id is not null or p.since is null or g.ts >= p.since)
+    order by g.diamonds desc, g.ts
+    limit 1;
+$$;
+
 -- Součty za období / vysílání ze všech darů (nezávisle na tom, kolik dárců web zobrazuje)
 create or replace function public.leaderboard_totals(
     p_streamer  text,
@@ -232,11 +266,13 @@ revoke all on function public.list_streamers()                       from public
 revoke all on function public.list_streams(text)                     from public, anon, authenticated;
 revoke all on function public.leaderboard(text, text, bigint, int, text) from public, anon, authenticated;
 revoke all on function public.leaderboard_totals(text, text, bigint) from public, anon, authenticated;
+revoke all on function public.top_gift(text, text, bigint) from public, anon, authenticated;
 revoke all on function public.collector_status()                     from public, anon, authenticated;
 grant execute on function public.list_streamers()                     to anon, authenticated;
 grant execute on function public.list_streams(text)                   to anon, authenticated;
 grant execute on function public.leaderboard(text, text, bigint, int, text) to anon, authenticated;
 grant execute on function public.leaderboard_totals(text, text, bigint)  to anon, authenticated;
+grant execute on function public.top_gift(text, text, bigint)  to anon, authenticated;
 grant execute on function public.collector_status()                   to anon, authenticated;
 
 -- ---------------------------------------------------------------- sběrače u jiných lidí (tokeny)
