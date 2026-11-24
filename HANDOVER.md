@@ -194,6 +194,11 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
   Ve zdrojácích FFmpeg (`libavformat/movenc.c`) je pro H.264 v běžném MP4 jediná cesta k AVERROR_PATCHWELCOME
   `mov_cts_out_of_range` → „pts/dts pair unsupported“ (rozdíl pts−dts mimo int32) – B-snímky + skok v časových značkách
   záznamu. Oprava: `-bf 0` (pts == dts) a `-loglevel warning`, ať je příčina příště vidět v logu.
+- Třetí pokus (s warningy) ukázal skutečnou příčinu: kolem 45. s skok v časových značkách obrazu o desítky dní
+  („Packet duration: 16759380582 / dts: 93596879691 … out of range“, „pts has no value“), zvuk mírně pozpátku
+  („Non-monotonic DTS“). Oprava: obraz `setpts` – čas běží o skutečný rozdíl mezi snímky, nesmyslný skok (záporný,
+  > 5 s, NaN) = +1/30 s; zvuk `aresample=48000,asetpts=N/SR/TB` (čas podle vzorků). Test ve workspace: video se skokem
+  o ~35 dní (41264 s podle kontejneru) → výstup 65 s; běžné video beze změny délky.
 
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.

@@ -694,8 +694,14 @@ def main() -> None:
         # frekvence při bitvě / co-hostu, výjimečně i rozměr obrazu). Kopírování zvuku do MP4 pak novější ffmpeg
         # odmítne („Error muxing a packet … Not yet implemented“) → zvuk se znovu kóduje do jednotného AAC
         # a obraz se drží v pevném rozměru (při změně se zmenší a doplní okraji, nedeformuje se).
-        vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
-              "ass=overlay.ass")
+        # Časové značky: záznam z TikToku umí uprostřed „resetovat hodiny“ (skok o dny, snímky bez pts, zvuk mírně
+        # pozpátku) – přehrávač to přejde, ale kodér/muxer MP4 skončí chybou („Packet duration … out of range“).
+        # Obraz: čas běží dál o skutečný rozdíl mezi snímky, nesmyslný skok (záporný, > 5 s, chybějící pts)
+        # se nahradí jedním snímkem (1/30 s). Zvuk: čas podle počtu vzorků (souvislý, bez skoků).
+        fix_pts = ("setpts='if(isnan(PREV_INPTS),PTS-STARTPTS,"
+                   "if(gt(PTS-PREV_INPTS,0)*lt(PTS-PREV_INPTS,5/TB),PREV_OUTPTS+PTS-PREV_INPTS,PREV_OUTPTS+1/(30*TB)))'")
+        vf = (f"{fix_pts},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
+              "setsar=1,ass=overlay.ass")
         cmd += ["-i", str(video), "-vf", vf]
         if a.frame is not None:
             cmd += ["-ss", f"{lead:.3f}", "-frames:v", "1", "-update", "1", str(out)]
@@ -705,7 +711,7 @@ def main() -> None:
             # -bf 0: bez B-snímků je pts == dts. Záznam z TikToku má občas skok v časových značkách; s B-snímky pak
             # rozdíl pts/dts přeteče a muxer MP4 skončí chybou „pts/dts pair unsupported“ → „Not yet implemented“.
             cmd += ["-c:v", "libx264", "-preset", a.preset, "-crf", str(a.crf), "-bf", "0", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000",
+                    "-af", "aresample=48000,asetpts=N/SR/TB", "-c:a", "aac", "-b:a", "160k", "-ac", "2",
                     "-movflags", "+faststart", str(out)]
         print("Vyrábím:", out)
         r = subprocess.run(cmd, cwd=tmp)
