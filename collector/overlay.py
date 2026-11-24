@@ -169,8 +169,9 @@ def part_start(events: list[dict], video: Path) -> float:
     """Čas (epoch) začátku dílu videa = čas 0 ve videu."""
     stem = re.sub(r"_overlay$", "", video.stem)
     parts = [e for e in events if e.get("type") == "part"]
+    alt = stem[:-5] if stem.endswith("_dil1") else None   # 1. díl vícedílného záznamu sběrač přejmenuje na _dil1
     for e in parts:
-        if e.get("file") == stem:
+        if e.get("file") in (stem, alt):
             return float(e["t"])
     if len(parts) == 1:
         return float(parts[0]["t"])
@@ -681,6 +682,8 @@ def main() -> None:
     p.add_argument("--ass-only", action="store_true", help="jen vytvořit soubor titulků .ass")
     p.add_argument("--from-db", action="store_true", help="bez souboru událostí: dary ze Supabase")
     p.add_argument("--streamer", help="účet (pro --from-db; výchozí = název složky s videem)")
+    p.add_argument("--size", help="pevný rozměr výstupu ŠxV (např. 720x1280) – sběrač tak sjednotí díly vysílání, "
+                                  "aby šly spojit bez překódování; menší obraz se zmenší/doplní okraji")
     p.add_argument("--ffmpeg")
     a = p.parse_args()
 
@@ -708,6 +711,16 @@ def main() -> None:
     offset = (a.frame - lead) if a.frame is not None else a.start
     times = battle_sample_times(events, t0, a.delay, duration)
     layout = detect_layout(ffmpeg, video, times, w, h) if times else None
+    if a.size:                                           # sjednocený rozměr (díly jednoho vysílání)
+        try:
+            tw, th = (int(x) for x in a.size.lower().split("x"))
+        except ValueError:
+            sys.exit(f"--size musí být ve tvaru ŠxV, např. 720x1280 (je: {a.size})")
+        k = min(tw / w, th / h)
+        ox, oy = (tw - round(w * k)) // 2, (th - round(h * k)) // 2
+        if layout:
+            layout = (round(layout[0] * k) + ox, round(layout[1] * k) + oy, round(layout[2] * k), round(layout[3] * k))
+        w, h = tw, th
     ass_text = build_ass(events, t0, a.delay, w, h, duration, offset=offset, layout=layout)
     counts = {k: sum(1 for e in events if e.get("type") == k) for k in ("gift", "comment", "battle", "score")}
     print(f"Události: {counts['gift']} darů, {counts['comment']} komentářů, "

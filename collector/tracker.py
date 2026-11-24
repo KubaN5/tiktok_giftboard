@@ -39,6 +39,7 @@ import argparse
 import asyncio
 import collections
 import json
+import re
 import logging
 import os
 import shutil
@@ -486,32 +487,68 @@ class Recorder:
                 log.warning("@%s: dokončení nahrávky selhalo: %s: %s", self.streamer, type(ex).__name__, ex)
 
     async def _finalize(self) -> None:
-        done: list[Path] = []
-        for part in self.parts:
+        """Po vysílání: díly .ts → MP4. Víc dílů (TikTok stream ukončí při začátku/konci duelu) se spojí do jednoho
+        videa <začátek>.mp4; když spojit nejdou (jiný rozměr, rozbité časy), zůstanou díly. Overlay se vyrábí
+        z jednotlivých dílů (každý má vlastní čas začátku) a pak se taky spojí."""
+        parts = [p for p in self.parts if p.exists() and p.stat().st_size >= 100_000]
+        for p in self.parts:                                  # prázdné pokusy o navázání
+            if p not in parts:
+                p.unlink(missing_ok=True)
+        multi = len(parts) > 1
+        local: list[Path] = []
+        for part in parts:
             try:
-                mp4 = await self._finalize_part(part)
+                name = f"{self.base}_dil1.mp4" if multi and part.stem == self.base else part.stem + ".mp4"
+                mp4 = await self._remux(part, part.with_name(name))
                 if mp4:
-                    done.append(mp4)
+                    local.append(mp4)
             except Exception as ex:                       # např. soubor zamčený antivirem / synchronizací
                 log.warning("@%s: dokončení %s selhalo: %s", self.streamer, part.name, ex)
+        if not local:
+            return
+        merged = None
+        if len(local) > 1:
+            merged = await concat_videos(self.cfg.ffmpeg, local, self.folder / f"{self.base}.mp4", self.streamer)
+        overlay = self.cfg.overlay and self.events_path.exists()
+        raws = [merged] if merged else local
+        keep_local = overlay and len(local) > 1           # overlay se vyrábí z dílů → díly zatím nechat
+        saved: list[Path] = []
+        for f in raws:
+            dest = f
+            try:
+                if self.cfg.share_dir:                    # do sdílené složky až hotový soubor
+                    dest = self.cfg.share_dir / self.streamer / f.name
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    log.info("@%s: přesouvám %s do %s…", self.streamer, f.name, dest.parent)
+                    if keep_local and f in local:
+                        await asyncio.to_thread(shutil.copyfile, str(f), str(dest))
+                    else:
+                        await asyncio.to_thread(shutil.move, str(f), str(dest))
+                log.info("@%s: záznam uložen: %s (%.1f MB)", self.streamer, dest, dest.stat().st_size / 1e6)
+            except Exception as ex:
+                log.warning("@%s: přesun %s do sdílené složky selhal (%s) – zůstává %s", self.streamer, f.name, ex, f)
+                dest = f
+            saved.append(dest)
+        if merged and not keep_local:                     # díly jsou ve spojeném videu
+            for f in local:
+                f.unlink(missing_ok=True)
         events = self.events_path
-        if done and events.exists() and self.cfg.share_dir:   # kopie událostí k videu (ruční overlay.py)
+        if events.exists() and self.cfg.share_dir:        # kopie událostí k videu (ruční overlay.py)
             try:
                 dest = self.cfg.share_dir / self.streamer / events.name
                 await asyncio.to_thread(shutil.copyfile, str(events), str(dest))
             except Exception as ex:
                 log.warning("@%s: kopie událostí do sdílené složky selhala: %s", self.streamer, ex)
-        if done and self.cfg.overlay and events.exists():
-            task = asyncio.create_task(render_overlays(self.streamer, done, events, self.cfg,
-                                                       self.store, self.stream_id))
+        if overlay:
+            videos = local if len(local) > 1 else saved
+            task = asyncio.create_task(render_overlays(
+                self.streamer, videos, events, self.cfg, self.store, self.stream_id,
+                combine=self.base if len(local) > 1 else None, cleanup=local if len(local) > 1 else []))
             OVERLAY_TASKS.add(task)
             task.add_done_callback(OVERLAY_TASKS.discard)
 
-    async def _finalize_part(self, part: Path) -> Path | None:
-        if not part.exists() or part.stat().st_size < 100_000:
-            part.unlink(missing_ok=True)
-            return None
-        mp4 = part.with_suffix(".mp4")
+    async def _remux(self, part: Path, mp4: Path) -> Path | None:
+        """Bezztrátový převod dílu .ts → .mp4 (v pracovní složce); .ts se po úspěchu smaže."""
         log.info("@%s: převádím %s na MP4 (%.1f MB)…", self.streamer, part.name, part.stat().st_size / 1e6)
         proc = await asyncio.create_subprocess_exec(
             self.cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(part),
@@ -520,18 +557,69 @@ class Recorder:
             stderr=asyncio.subprocess.DEVNULL, creationflags=NO_WINDOW)
         if await proc.wait() == 0 and mp4.exists() and mp4.stat().st_size > 0:
             part.unlink(missing_ok=True)
-            size = mp4.stat().st_size / 1e6
-            if self.cfg.share_dir:                        # do sdílené složky až hotový soubor
-                dest = self.cfg.share_dir / self.streamer / mp4.name
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                log.info("@%s: přesouvám %s do %s…", self.streamer, mp4.name, dest.parent)
-                await asyncio.to_thread(shutil.move, str(mp4), str(dest))
-                mp4 = dest
-            log.info("@%s: záznam uložen: %s (%.1f MB)", self.streamer, mp4, size)
             return mp4
         mp4.unlink(missing_ok=True)
         log.warning("@%s: převod na MP4 se nepovedl, záznam zůstává jako %s", self.streamer, part)
         return None
+
+
+async def media_info(ffmpeg: str, video: Path) -> dict:
+    """Základní parametry videa z výpisu `ffmpeg -i`: délka, kodek a rozměr obrazu, parametry zvuku."""
+    info: dict = {}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg, "-hide_banner", "-i", str(video), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
+        _, err = await proc.communicate()
+        for line in err.decode(errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("Duration:") and "duration" not in info:
+                try:
+                    h, m, sec = line.split(",")[0].split()[1].split(":")
+                    info["duration"] = int(h) * 3600 + int(m) * 60 + float(sec)
+                except ValueError:
+                    pass
+            mv = re.search(r"Video: (\w+).*?, (\d{2,5})x(\d{2,5})", line)
+            if mv and "video" not in info:
+                info["video"] = (mv.group(1), int(mv.group(2)), int(mv.group(3)))
+            ma = re.search(r"Audio: (\w+).*?, (\d+) Hz, ([\w.]+)", line)
+            if ma and "audio" not in info:
+                info["audio"] = (ma.group(1), int(ma.group(2)), ma.group(3))
+    except Exception as ex:
+        log.debug("parametry videa %s: %s", video.name, ex)
+    return info
+
+
+async def concat_videos(ffmpeg: str, videos: list[Path], out: Path, streamer: str) -> Path | None:
+    """Spojí videa bez překódování (concat demuxer). Jen když mají stejný kodek, rozměr a zvuk – jinak by výsledek
+    nešel správně přehrát. Při jakékoli chybě vrátí None a díly zůstanou samostatně."""
+    infos = [await media_info(ffmpeg, v) for v in videos]
+    keys = {(i.get("video"), i.get("audio")) for i in infos}
+    if len(keys) != 1 or not infos[0].get("video"):
+        log.warning("@%s: díly nejdou spojit bez překódování (různé parametry: %s) – zůstanou samostatně",
+                    streamer, "; ".join(f"{v.name} {i.get('video')}" for v, i in zip(videos, infos)))
+        return None
+    lst = out.with_suffix(".concat.txt")
+    try:
+        lst.write_text("".join("file '" + str(v.resolve()).replace("'", "'\\''") + "'\n" for v in videos),
+                       encoding="utf-8")
+        log.info("@%s: spojuji %s dílů → %s…", streamer, len(videos), out.name)
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
+            "-c", "copy", "-movflags", "+faststart", str(out),
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
+        _, err = await proc.communicate()
+        if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
+            return out
+        log.warning("@%s: spojení dílů se nepovedlo – zůstanou samostatně: %s", streamer,
+                    err.decode(errors="replace").strip()[-300:])
+    except Exception as ex:
+        log.warning("@%s: spojení dílů se nepovedlo – zůstanou samostatně: %s", streamer, ex)
+    finally:
+        lst.unlink(missing_ok=True)
+    out.unlink(missing_ok=True)
+    return None
 
 
 OVERLAY_TASKS: set[asyncio.Task] = set()
@@ -541,26 +629,52 @@ BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) if sys.plat
 
 
 async def render_overlays(streamer: str, videos: list[Path], events: Path, cfg: RecordConfig,
-                          store: "Store | None" = None, stream_id: int | None = None) -> None:
+                          store: "Store | None" = None, stream_id: int | None = None,
+                          combine: str | None = None, cleanup: list[Path] | None = None) -> None:
     """Na pozadí (a se sníženou prioritou) vyrobí *_overlay.mp4 přes overlay.py – jedno video po druhém.
-    S YOUTUBE_PREP=1 hotové video přesune do složky pro YouTube (+ .txt s názvem a popisem), s Telegramem pošle zprávu."""
+    combine = díly jednoho vysílání: všechny se vyrobí ve stejném rozměru a spojí do <combine>_overlay.mp4.
+    S YOUTUBE_PREP=1 hotové video přesune do složky pro YouTube (+ .txt s názvem a popisem), s Telegramem pošle zprávu.
+    cleanup = pracovní soubory (díly), které se po úspěchu smažou."""
     script = Path(__file__).resolve().with_name("overlay.py")
+    size = None
+    if combine:                                          # rozměr nejdelšího dílu (největší soubor)
+        info = await media_info(cfg.ffmpeg, max(videos, key=lambda v: v.stat().st_size))
+        if info.get("video"):
+            size = f"{info['video'][1]}x{info['video'][2]}"
     async with OVERLAY_LOCK:
+        rendered: list[tuple[Path, Path]] = []           # (zdrojové video, overlay)
+        failed = False
         for video in videos:
             out = cfg.out_dir / streamer / f"{video.stem}_overlay.mp4"
             log.info("@%s: vyrábím video s dary a komentáři → %s (může trvat dlouho)", streamer, out.name)
             try:
                 proc = await asyncio.create_subprocess_exec(
                     sys.executable, str(script), str(video), "--events", str(events), "--out", str(out),
-                    "--ffmpeg", cfg.ffmpeg, stdin=asyncio.subprocess.DEVNULL,
+                    "--ffmpeg", cfg.ffmpeg, *(["--size", size] if size else []), stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
                     creationflags=NO_WINDOW | BELOW_NORMAL)
                 _, err = await proc.communicate()
                 if proc.returncode != 0 or not out.exists():
+                    failed = True
                     log.warning("@%s: overlay se nepovedl: %s", streamer, err.decode(errors="replace")[-500:])
                     notify(f"⚠️ <b>Video s overlayem se nepovedlo</b>\n@{tg_escape(streamer)} · "
-                                 f"<code>{tg_escape(video.name)}</code>\nPodrobnosti v logu sběrače.")
+                           f"<code>{tg_escape(video.name)}</code>\nPodrobnosti v logu sběrače.")
                     continue
+                rendered.append((video, out))
+            except Exception as ex:
+                failed = True
+                log.warning("@%s: overlay %s selhal: %s", streamer, video.name, ex)
+                notify(f"⚠️ <b>Video s overlayem se nepovedlo</b>\n@{tg_escape(streamer)} · "
+                       f"<code>{tg_escape(video.name)}</code>\n{tg_escape(str(ex)[:300])}")
+        if combine and len(rendered) > 1 and not failed:  # všechny díly hotové → jedno video
+            merged = await concat_videos(cfg.ffmpeg, [o for _, o in rendered],
+                                         cfg.out_dir / streamer / f"{combine}_overlay.mp4", streamer)
+            if merged:
+                for _, o in rendered:
+                    o.unlink(missing_ok=True)
+                rendered = [(cfg.out_dir / streamer / f"{combine}.mp4", merged)]
+        for video, out in rendered:
+            try:
                 if cfg.youtube_dir:
                     await prepare_youtube(streamer, video, out, cfg, store, stream_id)
                     continue
@@ -570,11 +684,14 @@ async def render_overlays(streamer: str, videos: list[Path], events: Path, cfg: 
                     out = dest
                 log.info("@%s: video s overlayem hotové: %s", streamer, out)
                 notify(f"🎬 <b>Video s overlayem hotové</b>\n@{tg_escape(streamer)}\n"
-                             f"📁 <code>{tg_escape(str(out))}</code>")
+                       f"📁 <code>{tg_escape(str(out))}</code>")
             except Exception as ex:
-                log.warning("@%s: overlay %s selhal: %s", streamer, video.name, ex)
-                notify(f"⚠️ <b>Video s overlayem se nepovedlo</b>\n@{tg_escape(streamer)} · "
-                             f"<code>{tg_escape(video.name)}</code>\n{tg_escape(str(ex)[:300])}")
+                log.warning("@%s: přesun overlaye %s selhal: %s", streamer, out.name, ex)
+        if cleanup and not failed:                       # díly už nejsou potřeba (jsou ve spojeném videu)
+            for f in cleanup:
+                f.unlink(missing_ok=True)
+        elif cleanup:
+            log.info("@%s: díly pro ruční overlay zůstávají v %s", streamer, cleanup[0].parent)
 
 
 # --------------------------------------------------------------------------

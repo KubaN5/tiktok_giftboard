@@ -72,6 +72,11 @@ a do sdílené složky se přesune až hotové MP4 (synchronizace tak nenahráv�
 Kvalita `RECORD_QUALITY`: `origin` (nejlepší, výchozí), `uhd` 720p, `hd` 540p, `sd`/`ld` 480p.
 Video se nepřekódovává (nezatěžuje procesor); hodina má zhruba 0,5–2 GB.
 
+**Díly:** TikTok stream při začátku a konci duelu ukončí (přepne obraz) – sběrač se hned znovu připojí a nahrává
+další díl. Po vysílání se díly spojí do jednoho videa `RRRR-MM-DD_HH-MM.mp4` (a overlay do `…_overlay.mp4`),
+takže na Drive i na YouTube jde jedno video za vysílání. Když díly spojit nejdou (jiný rozměr obrazu), čisté video
+zůstane po dílech (`…_dil1.mp4`, `…_dil2.mp4`, …); overlay se vyrábí ve stejném rozměru, takže se spojí vždy.
+
 Jak to funguje: během vysílání se zapisuje `.ts` (přehratelný i při pádu PC, např. ve VLC); po konci se bezztrátově
 převede na `.mp4`. Při výpadku spojení se nahrávání naváže dalším dílem (`…_dil2.mp4`). Na dary nemá nahrávání vliv –
 když selže, sběr darů běží dál. Záznamy jsou jen pro vlastní potřebu – video patří autorce vysílání.

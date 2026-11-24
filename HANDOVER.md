@@ -211,6 +211,21 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
   snímku) – ozdobné „srdíčko“ ꨄ z písma Cham v přezdívce/komentáři. `clean()` nahrazuje ꨄ / ᥫ᭡ → ♥ (`DECOR`),
   `run_ffmpeg()` propouští výpis ffmpeg a stejné fontselect varování ukáže jen jednou.
 
+## Díly vysílání a jejich spojování (od 24. 11. 2026 večer)
+- Večerní LIVE 24. 11. (19:01–20:13) se nahrálo do 7 dílů: TikTok ukončí pull stream při začátku/konci duelu
+  (ffmpeg „kód 0“), ráno to samé místo dílů způsobilo skok časových značek. Všech 7 overlayů ale prošlo (opravy fungují).
+- `Recorder._run`: po kódu 0 a dílu > 100 kB navázat za 0,5 s (dřív 5 s); `fetch_room_info` s limitem 30 s
+  (15:00 visel dotaz při výpadku sítě a záznam se nikdy nedokončil).
+- `Recorder._finalize`: díly < 100 kB pryč, `_remux` .ts → .mp4 lokálně (1. díl vícedílného záznamu = `<base>_dil1.mp4`,
+  `overlay.part_start` to páruje s událostí `part` `<base>`), `concat_videos()` – concat demuxer `-c copy`, jen když
+  `media_info()` (parsování `ffmpeg -i`) hlásí stejný kodek/rozměr/zvuk; jinak / při chybě díly zůstanou.
+  Spojené video (nebo díly) do `RECORD_SHARE_DIR`; s overlayem zůstávají lokální díly do konce výroby overlaye.
+- `render_overlays(..., combine=base, cleanup=díly)`: všechny díly s `--size` podle největšího dílu (overlay.py
+  zmenší/doplní okraji a přepočte okna bitvy), pak concat → `<base>_overlay.mp4` → jedna YouTube příprava / jedna
+  Telegram zpráva. Když některý díl selže: nespojuje se, díly zůstanou lokálně pro ruční overlay.
+- Test: `/home/claude/tests/test_merge.py` (3 díly + prázdný pokus, různé rozměry, jeden díl, bez overlaye, YouTube).
+- Watch: po chybě (ConnectTimeout…) jednou „spojení s TikTokem zase funguje – nevysílá, hlídám dál“.
+
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.
 - Supabase Realtime místo pollingu každých 10 s.
