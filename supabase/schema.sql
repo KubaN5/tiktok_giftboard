@@ -609,3 +609,4 @@ revoke all on function public.track_view(text)            from public;
 revoke all on function public.visits_summary(date, date)  from public, anon, authenticated;
 grant execute on function public.track_view(text)         to anon, authenticated;
 grant execute on function public.visits_summary(date, date) to service_role;
+grant select, insert, update on public.visit_reports to service_role;   -- sběrač: kdy byl odeslán týdenní souhrn
