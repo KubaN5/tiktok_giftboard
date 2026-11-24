@@ -190,6 +190,10 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Oprava v `overlay.py`: zvuk se znovu kóduje (`-c:a aac -b:a 160k -ac 2 -ar 48000`), obraz se drží v pevném rozměru
   (`scale=w:h:force_original_aspect_ratio=decrease,pad=…,setsar=1` před `ass`). Ve workspace (ffmpeg 6.1) chyba nejde
   zopakovat, ověřeno jen, že nový příkaz projde i se změnou zvuku uprostřed (mono 44,1 kHz → stereo 48 kHz).
+- Ruční pokus pak spadl znovu, chyba ale u obrazu (`vost#0:0/libx264 … Error submitting a packet to the muxer`).
+  Ve zdrojácích FFmpeg (`libavformat/movenc.c`) je pro H.264 v běžném MP4 jediná cesta k AVERROR_PATCHWELCOME
+  `mov_cts_out_of_range` → „pts/dts pair unsupported“ (rozdíl pts−dts mimo int32) – B-snímky + skok v časových značkách
+  záznamu. Oprava: `-bf 0` (pts == dts) a `-loglevel warning`, ať je příčina příště vidět v logu.
 
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.

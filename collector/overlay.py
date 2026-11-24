@@ -687,7 +687,7 @@ def main() -> None:
             shutil.copyfile(ass_file, target)
             print(f"Titulky: {target}")
             return
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-stats", "-y"]
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "warning", "-stats", "-y"]   # warning: ať je vidět i příčina chyby
         if offset:
             cmd += ["-ss", f"{offset:.3f}"]
         # Stream z TikToku umí uprostřed vysílání změnit parametry (např. zvuk mono → stereo nebo jiná vzorkovací
@@ -702,7 +702,9 @@ def main() -> None:
         else:
             if a.duration:
                 cmd += ["-t", f"{a.duration:.3f}"]
-            cmd += ["-c:v", "libx264", "-preset", a.preset, "-crf", str(a.crf), "-pix_fmt", "yuv420p",
+            # -bf 0: bez B-snímků je pts == dts. Záznam z TikToku má občas skok v časových značkách; s B-snímky pak
+            # rozdíl pts/dts přeteče a muxer MP4 skončí chybou „pts/dts pair unsupported“ → „Not yet implemented“.
+            cmd += ["-c:v", "libx264", "-preset", a.preset, "-crf", str(a.crf), "-bf", "0", "-pix_fmt", "yuv420p",
                     "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000",
                     "-movflags", "+faststart", str(out)]
         print("Vyrábím:", out)
