@@ -78,7 +78,8 @@
   .more button { cursor:pointer; padding:9px 16px; }
   .more button:active { border-color:var(--acc); }
   @media (max-width:560px) { .hide-sm { display:none; } .stats { display:grid; grid-template-columns:1fr 1fr; } .stat { min-width:0; padding:8px 10px; } .stat b { white-space:nowrap; } .stat b { font-size:17px; } th, td { padding:9px 8px; } header, main { padding-left:12px; padding-right:12px; } }
-  footer { color:var(--muted); font-size:12px; text-align:center; }
+  footer { color:var(--muted); font-size:12px; text-align:center; padding-bottom:64px; }   /* místo pro odznak Netlify */
+  footer .meta a { color:var(--muted); }
   .gapnote { display:none; margin:0 0 12px; padding:10px 14px; border-radius:10px; background:#2a1a12; border:1px solid #7a4a1f; color:#ffcf9a; font-size:14px; }
   .gapnote.show { display:block; }
   .cov { margin-top:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
@@ -139,12 +140,14 @@
     <div class="hint">Kdy během vysílání sběrač nesbíral (pád PC, výpadek internetu, pozdní spuštění) – dary z té doby chybí. Řídí se zvoleným obdobím nebo vysíláním. Zelená = sbíralo se, červená = výpadek (od 1 min).</div>
     <div id="covlist"></div>
   </section>
-  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. <i class="coin" aria-hidden="true"></i> = mince, cena darů, kterou zaplatili diváci (růže = 1). Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p></footer>
+  <footer><p>Obnovuje se každých 10 s. Sběrač je offline, když se 2 min neozval. <i class="coin" aria-hidden="true"></i> = mince, cena darů, kterou zaplatili diváci (růže = 1). Kč = odhad, kolik z toho dostane tvůrce (~polovina, 0,005 USD/minci, aktuální kurz) – před daní a poplatky.</p>
+    <p class="meta">Data sbíráme od <b>24. 11. 2026</b><br>Kontakt: <a id="mail" href="#">e-mail</a><span id="ver"></span></p></footer>
 </main>
 <script src="config.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const CFG = window.APP_CONFIG || {};
+const CONTACT = ["galeriehanby", "gmail.com"];   // kontakt v patičce (skládá se až v prohlížeči kvůli spamu)
 let period = "all", streamId = "";
 const PAGE = 50;          // dárců na stránku
 let shown = PAGE, query = "", seq = 0;
@@ -402,6 +405,8 @@ $("#q").addEventListener("input", e => {
 });
 
 (async () => {
+  const mail = CONTACT.join("@"); $("#mail").href = "mailto:" + mail; $("#mail").textContent = mail;
+  if (CFG.built) $("#ver").innerHTML = "<br>Poslední aktualizace: " + esc(CFG.built);
   if (!CFG.supabaseUrl || !CFG.supabaseKey) { showError("Chybí konfigurace Supabase (config.js)."); return; }
   try { await loadStreamers(); } catch (e) { showError(e.message); return; }
   await refresh(); loadCollectors();
