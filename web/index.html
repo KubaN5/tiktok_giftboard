@@ -185,6 +185,18 @@ async function rpc(fn, args = {}) {
   return r.json();
 }
 
+// Anonymní počítání návštěv (do Supabase; na stránce se nezobrazuje). ?notrack vypne měření v tomto prohlížeči.
+function trackView() {
+  try {
+    if (/[?&]notrack\b/.test(location.search)) localStorage.setItem("gb_notrack", "1");
+    if (localStorage.getItem("gb_notrack") || sessionStorage.getItem("gb_tracked")) return;
+    sessionStorage.setItem("gb_tracked", "1");
+    let id = localStorage.getItem("gb_vid");
+    if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2)); localStorage.setItem("gb_vid", id); }
+    rpc("track_view", { p_visitor: id }).catch(() => {});
+  } catch {}
+}
+
 function showError(msg) {
   $("#rows").innerHTML = `<tr><td colspan="6" class="empty">⚠️ ${esc(msg)}</td></tr>`;
 }
@@ -439,6 +451,7 @@ $("#q").addEventListener("input", e => {
   const mail = CONTACT.join("@"); $("#mail").href = "mailto:" + mail; $("#mail").textContent = mail;
   if (CFG.built) $("#ver").innerHTML = "<br>Poslední aktualizace: " + esc(CFG.built);
   if (!CFG.supabaseUrl || !CFG.supabaseKey) { showError("Chybí konfigurace Supabase (config.js)."); return; }
+  trackView();
   try { await loadStreamers(); } catch (e) { showError(e.message); return; }
   await refresh(); loadCollectors();
   setInterval(async () => { try { await loadStreamers(); } catch {} refresh(); loadCollectors(); }, 10000);

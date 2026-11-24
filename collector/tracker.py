@@ -46,7 +46,7 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -726,6 +726,63 @@ def notify(*messages: str) -> None:
     task.add_done_callback(BACKGROUND.discard)
 
 
+
+# --------------------------------------------------------------------------
+# Týdenní souhrn návštěvnosti webu -> Telegram (jen se secret klíčem a zapnutým Telegramem)
+# --------------------------------------------------------------------------
+
+REPORT_HOUR = 8                      # v pondělí od této hodiny (čas PC) se pošle souhrn minulého týdne
+CZ_DAYS = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"]
+
+
+def fmt_day(d: date) -> str:
+    return f"{d.day}. {d.month}."
+
+
+def visits_message(cur: dict, prev: dict, start: date, end: date) -> str:
+    by_day = {date.fromisoformat(x["day"]): x for x in cur.get("per_day", [])}
+    days = []
+    for i in range(7):
+        d = start + timedelta(days=i)
+        days.append(f"{CZ_DAYS[d.weekday()]} {by_day[d]['visitors'] if d in by_day else 0}")
+    return (f"📊 <b>Návštěvnost webu</b> {fmt_day(start)} – {fmt_day(end)}\n"
+            f"Návštěvníků: <b>{cur['visitors']}</b> (noví: {cur['new_visitors']}, minulý týden: {prev['visitors']})\n"
+            f"Návštěv celkem: {cur['hits']}\n"
+            f"Po dnech: {' · '.join(days)}")
+
+
+async def weekly_visits_report(store: "Store") -> None:
+    """Každé pondělí po REPORT_HOUR pošle souhrn minulého týdne. Když byl sběrač v pondělí vypnutý,
+    pošle se při dalším spuštění (stav je v tabulce visit_reports, takže nikdy dvakrát)."""
+    if store.token or TELEGRAM is None:      # tokenový sběrač tabulky nečte; bez Telegramu není kam psát
+        return
+    while True:
+        try:
+            now = datetime.now()
+            monday = now.date() - timedelta(days=now.weekday())
+            start, end = monday - timedelta(days=7), monday - timedelta(days=1)
+            if now >= datetime.combine(monday, dtime(REPORT_HOUR)):
+                r = await store._req("GET", "/visit_reports", params={"week_start": f"eq.{start}", "select": "week_start"})
+                if not r.json():
+                    async def summary(a: date, b: date) -> dict:
+                        rr = await store._req("POST", "/rpc/visits_summary", json={"p_from": str(a), "p_to": str(b)})
+                        return rr.json()
+                    cur = await summary(start, end)
+                    first = cur.get("first_day")
+                    # Měření začalo až po konci hlášeného týdne -> nic nehlásit (jen označit jako vyřízené)
+                    ok = True
+                    if first and date.fromisoformat(first) <= end:
+                        prev = await summary(start - timedelta(days=7), end - timedelta(days=7))
+                        ok = await TELEGRAM.send(visits_message(cur, prev, start, end))
+                    if ok:
+                        await store._req("POST", "/visit_reports", params={"on_conflict": "week_start"},
+                                         headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+                                         json={"week_start": str(start)})
+        except Exception as ex:
+            log.warning("Týdenní souhrn návštěvnosti se nepovedl (zkusím za hodinu): %s", ex)
+        await asyncio.sleep(3600)
+
+
 async def telegram_test() -> int:
     """--telegram-test: bez TELEGRAM_CHAT_ID vypíše chaty, které botovi napsaly; s ním pošle zkušební zprávu."""
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
@@ -978,6 +1035,7 @@ async def run(usernames: list[str], interval: int) -> None:
     log.info("Hlídám: %s (kontrola každých %ss)", ", ".join("@" + s for s in streamers), interval)
     name = token_name or (os.getenv("COLLECTOR_NAME") or socket.gethostname() or "sběrač").strip()[:60]
     await asyncio.gather(store.writer(), store.avatar_worker(), store.heartbeat(name, streamers, bool(rec_cfg)),
+                         weekly_visits_report(store),
                          *(watch(s, store, interval, rec_cfg) for s in streamers))
 
 

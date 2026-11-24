@@ -559,3 +559,53 @@ grant execute on function public.set_room_start(bigint, timestamptz)            
 grant execute on function public.collector_close_streamer(text, text)              to anon;
 grant execute on function public.collector_room_start(text, bigint, timestamptz)   to anon;
 grant execute on function public.stream_coverage(text, int)                        to anon, authenticated;
+
+-- ---------------------------------------------------------------- návštěvnost webu
+-- Jeden řádek na návštěvníka a den (anonymní náhodné ID z prohlížeče, žádná IP) -> tabulka zůstane malá.
+-- Web zapisuje jen přes track_view(); čte pouze sběrač secret klíčem (týdenní souhrn na Telegram).
+create table if not exists public.page_views (
+    day         date        not null,
+    visitor     text        not null,
+    hits        integer     not null default 1,      -- počet návštěv (relací) toho dne
+    first_seen  timestamptz not null default now(),
+    last_seen   timestamptz not null default now(),
+    primary key (day, visitor)
+);
+alter table public.page_views enable row level security;
+
+-- Kdy už byl odeslán týdenní souhrn (week_start = pondělí hlášeného týdne).
+create table if not exists public.visit_reports (
+    week_start  date primary key,
+    sent_at     timestamptz not null default now()
+);
+alter table public.visit_reports enable row level security;
+
+create or replace function public.track_view(p_visitor text)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+    v text := left(coalesce(p_visitor, ''), 64);
+    d date := (now() at time zone 'Europe/Prague')::date;
+begin
+    if length(v) < 8 then return; end if;
+    if (select count(*) from page_views where day = d) >= 5000 then return; end if;   -- pojistka proti zahlcení
+    insert into page_views (day, visitor) values (d, v)
+    on conflict (day, visitor) do update set hits = page_views.hits + 1, last_seen = now();
+end $$;
+
+create or replace function public.visits_summary(p_from date, p_to date)
+returns jsonb language sql stable security definer set search_path = public as $$
+    select jsonb_build_object(
+        'first_day', (select min(day) from page_views),
+        'visitors',  (select count(distinct visitor) from page_views where day between p_from and p_to),
+        'hits',      (select coalesce(sum(hits), 0) from page_views where day between p_from and p_to),
+        'new_visitors', (select count(*) from (select visitor from page_views group by visitor
+                                               having min(day) between p_from and p_to) x),
+        'per_day',   coalesce((select jsonb_agg(jsonb_build_object('day', day, 'visitors', n, 'hits', h) order by day)
+                               from (select day, count(*) as n, sum(hits) as h from page_views
+                                     where day between p_from and p_to group by day) d), '[]'::jsonb));
+$$;
+
+revoke all on function public.track_view(text)            from public;
+revoke all on function public.visits_summary(date, date)  from public, anon, authenticated;
+grant execute on function public.track_view(text)         to anon, authenticated;
+grant execute on function public.visits_summary(date, date) to service_role;
