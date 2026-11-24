@@ -458,7 +458,9 @@ class Recorder:
             failures = 0 if size > 1_000_000 else failures + 1
             log.info("@%s: ffmpeg skončil (kód %s, %.1f MB)%s – zkusím navázat", self.streamer, code,
                      size / 1e6, (": " + " | ".join(tail)) if tail else "")
-            await asyncio.sleep(5)
+            # Kód 0 = TikTok stream ukončil (typicky začátek/konec duelu, kdy přepne obraz) → navázat hned,
+            # ať se ztratí co nejméně; při chybě nebo prázdném dílu chvíli počkat.
+            await asyncio.sleep(0.5 if code == 0 and size > 100_000 else 5)
         log.info("@%s: nahrávání skončilo, dokončuji záznam (%s díl/y)", self.streamer, len(self.parts))
         await self._finalize()
 
@@ -859,6 +861,7 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
     from TikTokLive.events import (CommentEvent, ConnectEvent, DisconnectEvent, GiftEvent, LinkMicArmiesEvent,
                                    LinkMicBattleEvent, LiveEndEvent)
 
+    had_error = False       # po chybě (výpadek spojení) jednou zalogovat, že zase hlídá
     close_pending = True    # při startu i po každém LIVE: až účet nevysílá, uzavřít visící vysílání v DB
     while True:
         client = TikTokLiveClient(unique_id="@" + streamer)
@@ -882,6 +885,9 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
 
         try:
             if not await client.is_live():
+                if had_error:
+                    log.info("@%s: spojení s TikTokem zase funguje – nevysílá, hlídám dál", streamer)
+                    had_error = False
                 if close_pending:
                     try:
                         await store.close_open_streams(streamer)
@@ -1017,6 +1023,7 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
         except Exception as ex:  # TikTok občas změní API / sign server odmítne požadavek
             log.warning("@%s: %s: %s – zkusím znovu za %ss",
                         streamer, type(ex).__name__, ex, interval)
+            had_error = True
             try:
                 await client.disconnect()
             except Exception:
