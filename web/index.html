@@ -68,6 +68,7 @@
   .podium .nm a { color:var(--fg); text-decoration:none; }
   .podium .ck { display:flex; align-items:center; gap:4px; font-weight:700; font-variant-numeric:tabular-nums; }
   .podium .kc { color:var(--muted); font-size:12px; }
+  .podium .ttl { font-size:10.5px; font-weight:900; letter-spacing:.6px; stroke-width:.6px; paint-order:stroke; }
   .podium .p1 .nm { font-size:15px; } .podium .p1 .ck { font-size:18px; }
   .search { display:flex; gap:8px; align-items:center; margin:0 0 10px; }
   .search input { flex:1; min-width:0; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 12px; font:inherit; }
@@ -292,10 +293,11 @@ const MEDAL = {
   2: { a:"#f1f4f8", b:"#aeb8c4", c:"#5e6874", bg:"linear-gradient(145deg,#ffffff,#cfd6df 55%,#97a2ae)" },
   3: { a:"#f3c08f", b:"#c47a3c", c:"#6e3d14", bg:"linear-gradient(145deg,#ffd9b0,#d9945a 55%,#9c5a26)" },
 };
+const TITLES = { 1: "RICO", 2: "BONGO", 3: "CHARLEY" };      // titul podle umístění (nahoře ve věnci)
 function wreath(rank) {
   const m = MEDAL[rank], id = "wg" + rank, cx = 50, cy = 50, r = 39;
   let leaves = "";
-  for (let i = 0; i < 9; i++) {
+  for (let i = 0; i < 7; i++) {                              // nahoře mezera na titul
     const a = (108 + i * 17) * Math.PI / 180;                 // od spodku přes levý bok nahoru
     for (const side of [-1, 1]) {                              // vnější / vnitřní řada
       const rr = r + side * 3.3, x = cx + rr * Math.cos(a), y = cy + rr * Math.sin(a);
@@ -310,6 +312,8 @@ function wreath(rank) {
   return `<svg viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="${m.a}"/><stop offset="1" stop-color="${m.b}"/></linearGradient></defs>
     ${half}<g transform="translate(100 0) scale(-1 1)">${half}</g>
+    <path id="ta${rank}" d="M14 50 A36 36 0 0 1 86 50" fill="none"/>
+      <text class="ttl" fill="url(#${id})" stroke="${m.c}"><textPath href="#ta${rank}" startOffset="50%" text-anchor="middle">${esc(TITLES[rank] || "")}</textPath></text>
     <path d="M42 92 l8 -6 l8 6 l-3 5 l-5 -3 l-5 3 z" fill="${m.b}" stroke="${m.c}" stroke-width=".5"/></svg>`;
 }
 let podiumHtml = "";
