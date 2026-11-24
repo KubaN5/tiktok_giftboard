@@ -46,6 +46,8 @@
   .rank { width:42px; font-weight:700; color:var(--muted); }
   .rank.r1 { color:#ffd54a; } .rank.r2 { color:#c9d1d9; } .rank.r3 { color:#d39a62; }
   .nick { color:var(--muted); font-size:13px; }
+  .tt { display:inline-block; padding:1px 6px; border-radius:4px; font-size:10px; font-weight:900; letter-spacing:.8px;
+        vertical-align:2px; box-shadow:0 1px 3px rgba(0,0,0,.4); }   /* titul top 3 (RICO / PONGO / CHARLEY) */
   a.prof { color:var(--fg); text-decoration:none; border-bottom:1px dotted var(--muted); }
   a.prof:hover, a.prof:active { color:#fff; border-bottom-color:var(--acc); }
   a.prof::after { content:"↗"; font-size:11px; color:var(--muted); margin-left:3px; }
@@ -149,7 +151,7 @@ const $ = s => document.querySelector(s);
 const CFG = window.APP_CONFIG || {};
 const CONTACT = ["galeriehanby", "gmail.com"];   // kontakt v patičce (skládá se až v prohlížeči kvůli spamu)
 let period = "all", streamId = "";
-const PAGE = 50;          // dárců na stránku
+const PAGE = 25;          // dárců na stránku
 let shown = PAGE, query = "", seq = 0;
 const fmt = n => Number(n || 0).toLocaleString("cs-CZ");
 // Odhad výdělku tvůrce: ~0,005 USD za minci (TikTok si nechá zhruba polovinu ceny daru).
@@ -296,7 +298,9 @@ const MEDAL = {
   2: { a:"#f1f4f8", b:"#aeb8c4", c:"#5e6874", bg:"linear-gradient(145deg,#ffffff,#cfd6df 55%,#97a2ae)" },
   3: { a:"#f3c08f", b:"#c47a3c", c:"#6e3d14", bg:"linear-gradient(145deg,#ffd9b0,#d9945a 55%,#9c5a26)" },
 };
-const TITLES = { 1: "RICO", 2: "PONGO", 3: "CHARLEY" };      // titul podle umístění (nahoře ve věnci)
+const TITLES = { 1: "RICO", 2: "PONGO", 3: "CHARLEY" };
+const tt = rank => rank <= 3 && TITLES[rank]       // štítek titulu v žebříčku (před @účtem)
+  ? `<span class="tt" style="background:${MEDAL[rank].bg};color:${MEDAL[rank].c}">${esc(TITLES[rank])}</span> ` : "";      // titul podle umístění (nahoře ve věnci)
 function wreath(rank) {
   const m = MEDAL[rank], id = "wg" + rank, cx = 50, cy = 50, r = 39;
   let leaves = "";
@@ -362,7 +366,7 @@ async function refresh() {
     $("#rows").innerHTML = rows.length ? rows.map(r => `
       <tr>
         <td class="rank${r.rank <= 3 ? " r" + r.rank : ""}">${r.rank}</td>
-        <td>${r.unique_id
+        <td>${tt(r.rank)}${r.unique_id
               ? `<a class="prof" href="https://www.tiktok.com/@${encodeURIComponent(r.unique_id)}" target="_blank" rel="noopener noreferrer" title="Otevřít profil na TikToku">@${esc(r.unique_id)}</a>`
               : `@${esc(r.user_id)}`} <span class="nick">${esc(r.nickname)}</span>
             <div class="barfill" style="width:${Math.max(2, 100*r.diamonds/max)}%"></div></td>
