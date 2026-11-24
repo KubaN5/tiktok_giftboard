@@ -449,8 +449,11 @@ class Recorder:
         if self.task:
             try:
                 await asyncio.wait_for(asyncio.shield(self.task), 600)
+            except asyncio.TimeoutError:            # shield: převod/přesun/overlay pokračuje na pozadí
+                log.warning("@%s: převod nebo přesun záznamu trvá déle než 10 min – běží dál na pozadí "
+                            "(sběrač nevypínej, hotovo = řádek „záznam uložen“)", self.streamer)
             except Exception as ex:
-                log.warning("@%s: dokončení nahrávky selhalo: %s", self.streamer, ex)
+                log.warning("@%s: dokončení nahrávky selhalo: %s: %s", self.streamer, type(ex).__name__, ex)
 
     async def _finalize(self) -> None:
         done: list[Path] = []
@@ -479,6 +482,7 @@ class Recorder:
             part.unlink(missing_ok=True)
             return None
         mp4 = part.with_suffix(".mp4")
+        log.info("@%s: převádím %s na MP4 (%.1f MB)…", self.streamer, part.name, part.stat().st_size / 1e6)
         proc = await asyncio.create_subprocess_exec(
             self.cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(part),
             "-c", "copy", "-movflags", "+faststart", str(mp4),
@@ -490,6 +494,7 @@ class Recorder:
             if self.cfg.share_dir:                        # do sdílené složky až hotový soubor
                 dest = self.cfg.share_dir / self.streamer / mp4.name
                 dest.parent.mkdir(parents=True, exist_ok=True)
+                log.info("@%s: přesouvám %s do %s…", self.streamer, mp4.name, dest.parent)
                 await asyncio.to_thread(shutil.move, str(mp4), str(dest))
                 mp4 = dest
             log.info("@%s: záznam uložen: %s (%.1f MB)", self.streamer, mp4, size)
