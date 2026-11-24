@@ -690,14 +690,21 @@ def main() -> None:
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-stats", "-y"]
         if offset:
             cmd += ["-ss", f"{offset:.3f}"]
-        cmd += ["-i", str(video), "-vf", "ass=overlay.ass"]
+        # Stream z TikToku umí uprostřed vysílání změnit parametry (např. zvuk mono → stereo nebo jiná vzorkovací
+        # frekvence při bitvě / co-hostu, výjimečně i rozměr obrazu). Kopírování zvuku do MP4 pak novější ffmpeg
+        # odmítne („Error muxing a packet … Not yet implemented“) → zvuk se znovu kóduje do jednotného AAC
+        # a obraz se drží v pevném rozměru (při změně se zmenší a doplní okraji, nedeformuje se).
+        vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+              "ass=overlay.ass")
+        cmd += ["-i", str(video), "-vf", vf]
         if a.frame is not None:
             cmd += ["-ss", f"{lead:.3f}", "-frames:v", "1", "-update", "1", str(out)]
         else:
             if a.duration:
                 cmd += ["-t", f"{a.duration:.3f}"]
             cmd += ["-c:v", "libx264", "-preset", a.preset, "-crf", str(a.crf), "-pix_fmt", "yuv420p",
-                    "-c:a", "copy", "-movflags", "+faststart", str(out)]
+                    "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000",
+                    "-movflags", "+faststart", str(out)]
         print("Vyrábím:", out)
         r = subprocess.run(cmd, cwd=tmp)
         if r.returncode != 0:

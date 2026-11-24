@@ -183,6 +183,14 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Otestováno v workspace: skutečný overlay.py + ffmpeg na testovacím videu (2 díly), mock PostgREST + Telegram API.
   RPC s `p_stream_id` ověřeno přes Supabase MCP. **Na skutečném Telegramu / Google Drive zatím neověřeno.**
 
+## Overlay – oprava pádu na prvním ostrém LIVE (24. 11. 2026)
+- 24. 11. overlay 72min vysílání spadl po 45 s: ffmpeg „Error muxing a packet … Not yet implemented in FFmpeg, patches welcome“
+  (Jakubův novější ffmpeg na Windows). Příčina: `-c:a copy` – stream TikToku mění uprostřed parametry zvuku (AAC extradata,
+  typicky při bitvě / co-hostu) a muxer MP4 to při kopírování neumí.
+- Oprava v `overlay.py`: zvuk se znovu kóduje (`-c:a aac -b:a 160k -ac 2 -ar 48000`), obraz se drží v pevném rozměru
+  (`scale=w:h:force_original_aspect_ratio=decrease,pad=…,setsar=1` před `ass`). Ve workspace (ffmpeg 6.1) chyba nejde
+  zopakovat, ověřeno jen, že nový příkaz projde i se změnou zvuku uprostřed (mono 44,1 kHz → stereo 48 kHz).
+
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.
 - Supabase Realtime místo pollingu každých 10 s.
