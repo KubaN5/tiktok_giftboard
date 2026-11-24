@@ -64,8 +64,10 @@
   .podium .av { position:absolute; inset:21%; overflow:hidden; border-radius:50%; display:grid; place-items:center; font-weight:800;
                 font-size:clamp(18px, 6vw, 28px); color:#15161c; z-index:1; box-shadow:0 0 0 3px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.45); }
   .podium .av img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
-  .podium .num { z-index:2; position:absolute; left:50%; bottom:6%; transform:translateX(-50%); font-size:12px; font-weight:800;
-                 padding:1px 7px; border-radius:999px; color:#15161c; }
+  .podium .num { z-index:2; position:absolute; left:50%; bottom:1%; transform:translateX(-50%); width:30px; height:30px;
+                 display:grid; place-items:center; box-sizing:border-box; border-radius:50%; font-size:15px; font-weight:900;
+                 line-height:1; color:#15161c; border:2px solid #0f1115; text-shadow:0 1px 0 rgba(255,255,255,.45); }
+  .podium .p1 .num { width:34px; height:34px; font-size:17px; }
   .podium .nm { margin-top:4px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; font-size:14px; }
   .podium .nm a { color:var(--fg); text-decoration:none; }
   .podium .ck { display:flex; align-items:center; gap:4px; font-weight:700; font-variant-numeric:tabular-nums; }
@@ -349,7 +351,7 @@ function renderPodium(rows) {
     const img = r.avatar_ver ? `<img src="${CFG.supabaseUrl}/storage/v1/object/public/avatars/${encodeURIComponent(r.user_id)}?v=${r.avatar_ver}" alt="" loading="lazy" onerror="this.remove()">` : "";
     return `<div class="p p${r.rank}">
       <div class="wr">${wreath(r.rank)}<div class="av" style="background:${m.bg};box-shadow:0 0 0 2.5px ${m.b},0 6px 18px rgba(0,0,0,.45)">${ini}${img}</div>
-        <span class="num" style="background:${m.bg}">${r.rank}.</span></div>
+        <span class="num" style="background:${m.bg};box-shadow:0 0 0 1.5px ${m.a},0 2px 6px rgba(0,0,0,.6)">${r.rank}</span></div>
       <div class="nm">${r.unique_id ? `<a href="https://www.tiktok.com/@${encodeURIComponent(r.unique_id)}" target="_blank" rel="noopener noreferrer">@${esc(name)}</a>` : "@" + esc(name)}</div>
       <div class="ck"><i class="coin" aria-hidden="true"></i>${fmt(r.diamonds)}</div>
       <div class="kc">≈ ${czk(r.diamonds)}</div></div>`;
