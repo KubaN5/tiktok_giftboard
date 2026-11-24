@@ -204,6 +204,9 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
   Oprava: za setpts filtr `fps=30` (vf_fps.c nastavuje `frame->duration = 1`, pracuje jen s pts) a v setpts se
   podezřele malé rozdíly (< 5 ms) berou taky jako skok. Novější ffmpeg ve workspace není (instalace zamítnuta),
   ověřeno na ffmpeg 6.1: skok o 35 dní → 65 s / 1950 snímků, běžné video 60 s.
+- Pátý pokus doběhl, ale ve výpisu stálo `frame=1124` od 0:37 do 1:15 a `drop` 8 → 1140 (≈ 38 s obrazu zahozeno).
+  Příčina: první snímek se poznával přes `isnan(PREV_INPTS)` – po snímku bez pts je PREV_INPTS NaN a výraz se vrátil
+  na původní (rozbitý, o 38 s pozadu) čas. Oprava: první snímek = `eq(N,0)`.
 
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.

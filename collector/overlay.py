@@ -698,7 +698,9 @@ def main() -> None:
         # pozpátku) – přehrávač to přejde, ale kodér/muxer MP4 skončí chybou („Packet duration … out of range“).
         # Obraz: čas běží dál o skutečný rozdíl mezi snímky, nesmyslný skok (záporný, > 5 s, chybějící pts)
         # nebo podezřele malý (< 5 ms) se nahradí jedním snímkem (1/30 s). Zvuk: čas podle počtu vzorků (souvislý, bez skoků).
-        fix_pts = ("setpts='if(isnan(PREV_INPTS),PTS-STARTPTS,"
+        # První snímek se pozná podle N, ne podle isnan(PREV_INPTS): po snímku bez pts je PREV_INPTS taky NaN
+        # a výraz by se „resetoval“ zpět na původní (rozbitý) čas → ffmpeg zahodil desítky sekund obrazu.
+        fix_pts = ("setpts='if(eq(N,0),PTS-STARTPTS,"
                    "if(gt(PTS-PREV_INPTS,0.005/TB)*lt(PTS-PREV_INPTS,5/TB),PREV_OUTPTS+PTS-PREV_INPTS,PREV_OUTPTS+1/(30*TB)))'")
         # fps=30: setpts mění jen čas snímku, ne jeho délku – a novější ffmpeg nesmyslnou délku z poškozeného snímku
         # předá kodéru („Application provided duration … invalid“). Filtr fps skládá výstup jen podle času
