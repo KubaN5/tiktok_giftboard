@@ -123,14 +123,25 @@
   .coin::after { content:""; position:absolute; inset:28%; border-radius:50%; border:.07em solid rgba(176,110,0,.55); }
   .cov .okfold summary { cursor:pointer; font-size:14px; }
   /* přehrávač LIVE (filtr „Poslední LIVE“, nad věnci) */
-  .lp { margin:20px auto 0; max-width:380px; background:var(--card); border:1px solid rgba(254,44,85,.45); border-radius:12px; padding:10px;
+  .lp { margin:20px auto 0; max-width:380px; transition:max-width .3s; background:var(--card); border:1px solid rgba(254,44,85,.45); border-radius:12px; padding:10px;
         box-shadow:0 0 0 1px rgba(254,44,85,.12), 0 10px 30px rgba(254,44,85,.12); }
   .lp[hidden] { display:none; }
+  .lp.wide { max-width:660px; }   /* co-host / bitva: oříznutý obraz je skoro čtvercový */
   .lp-head { display:flex; align-items:center; gap:8px; margin:0 2px 8px; font-weight:700; }
   .lp-head .live { margin-left:0; animation:pulse 2s infinite; }
   .lp-head a { margin-left:auto; color:var(--acc2); text-decoration:none; font-size:13px; font-weight:600; white-space:nowrap; }
-  .lp-frame { position:relative; aspect-ratio:9/16; width:min(100%, calc(64vh * 9 / 16)); min-width:200px; margin:auto; background:#000; border-radius:8px; overflow:hidden; }
-  .lp-frame video { display:block; width:100%; height:100%; object-fit:contain; background:#000; }
+  .lp-frame { --arn:.5625; position:relative; aspect-ratio:var(--arn); width:min(100%, calc(64vh * var(--arn))); min-width:200px;
+               margin:auto; background:#000; border-radius:8px; overflow:hidden; }
+  /* video je vždy 9:16; černé pruhy nahoře/dole (co-host) se oříznou posunem (top) a poměrem stran rámečku */
+  .lp-frame video { position:absolute; left:0; top:0; display:block; width:100%; height:auto; aspect-ratio:9/16; background:#000; }
+  .lp-frame:fullscreen video { position:static; width:100%; height:100%; aspect-ratio:auto; object-fit:contain; }
+  .lp-ctl { position:absolute; right:8px; bottom:8px; display:flex; gap:6px; z-index:2; }
+  .lp-ctl button { width:38px; height:38px; padding:0; display:grid; place-items:center; border-radius:50%; cursor:pointer;
+                   background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.25); color:#fff; font-size:17px; line-height:1; }
+  .lp-ctl button:hover { border-color:var(--acc); }
+  .lp-play { position:absolute; inset:0; margin:auto; width:70px; height:70px; border-radius:50%; z-index:2; cursor:pointer;
+             background:rgba(0,0,0,.55); border:2px solid rgba(255,255,255,.6); color:#fff; font-size:28px; padding:0 0 0 5px; }
+  .lp-play[hidden] { display:none; }
   .lp-msg { position:absolute; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; gap:10px;
             padding:20px; text-align:center; color:var(--muted); font-size:14px; background:rgba(0,0,0,.75); }
   .lp-msg.show { display:flex; }
@@ -176,8 +187,11 @@
   <div class="gapnote" id="gapnote"></div>
   <section class="lp" id="livebox" hidden aria-label="Živé vysílání">
     <div class="lp-head"><span class="live">LIVE</span><span>Právě vysílá</span><a id="lp-link" href="#" target="_blank" rel="noopener noreferrer">Otevřít na TikToku ↗</a></div>
-    <div class="lp-frame"><video id="lp-video" muted autoplay playsinline controls></video><div class="lp-msg" id="lp-msg"></div></div>
-    <div class="lp-note">Zvuk zapneš v přehrávači. Dárky a komentáře jen přímo na TikToku.</div>
+    <div class="lp-frame" id="lp-frame"><video id="lp-video" muted autoplay playsinline></video>
+      <button class="lp-play" id="lp-play" hidden aria-label="Přehrát">▶</button>
+      <div class="lp-ctl"><button id="lp-mute" title="Zapnout zvuk" aria-label="Zapnout zvuk">🔇</button><button id="lp-fs" title="Celá obrazovka" aria-label="Celá obrazovka">⛶</button></div>
+      <div class="lp-msg" id="lp-msg"></div></div>
+    <div class="lp-note">Zvuk zapneš tlačítkem 🔇. Dárky a komentáře jen přímo na TikToku.</div>
   </section>
   <div class="podium" id="podium"></div>
   <div class="search"><input id="q" type="search" placeholder="Hledat dárce (jméno nebo @účet)…" autocomplete="off" enterkeyhint="search"><small id="qinfo"></small></div>
@@ -425,6 +439,38 @@ function renderPodium(rows) {
 // může kdykoli zatrhnout; pak se ukáže odkaz na TikTok.
 const LP_LIB = "vendor/mpegts-1.8.2.min.js";
 let lp = null, lpUrl = "", lpFails = 0, lpSeq = 0, lpGen = 0, lpLib = null, lpRetry = null;   // lpSeq = dotaz, lpGen = adresa
+// Ořez černých pruhů: TikTok posílá vždy 9:16; při co-hostu / bitvě je obraz jen uprostřed (nahoře a dole černo).
+// Každé 2 s se zmenšený snímek projde po řádcích; stejný výsledek 2× za sebou -> ořízne se (jako na webu TikToku).
+let lpScanTimer = null, lpCand = "", lpCrop = "0.000-1.000";
+const lpCanvas = document.createElement("canvas");
+function lpApplyCrop(t, b) {
+  const v = $("#lp-video"), f = $("#lp-frame");
+  lpCrop = t.toFixed(3) + "-" + b.toFixed(3);
+  const ar = (v.videoWidth || 9) / ((v.videoHeight || 16) * (b - t));
+  f.style.setProperty("--arn", ar.toFixed(4));
+  v.style.top = (-100 * t / (b - t)).toFixed(3) + "%";
+  $("#livebox").classList.toggle("wide", ar > 0.8);
+}
+function lpScan() {
+  const v = $("#lp-video");
+  if (!v.videoWidth || v.readyState < 2) return;
+  const W = 36, H = 160;
+  lpCanvas.width = W; lpCanvas.height = H;
+  const cx = lpCanvas.getContext("2d", { willReadFrequently: true });
+  let d;
+  try { cx.drawImage(v, 0, 0, W, H); d = cx.getImageData(0, 0, W, H).data; } catch { return; }
+  const lit = y => { let sum = 0; for (let i = 0; i < W; i++) { const k = (y * W + i) * 4; sum += d[k] + d[k + 1] + d[k + 2]; } return sum / W / 3 > 8; };
+  let t = 0; while (t < H && !lit(t)) t++;
+  let b = H - 1; while (b > t && !lit(b)) b--;
+  if (b - t < H * 0.25) return;                         // skoro černý snímek (tma, přechod) – nic neměnit
+  // o řádek dovnitř a zaokrouhlit k obrazu, ať na okraji nezůstane černá linka
+  let ct = Math.ceil((t + 1) / H * 200) / 200, cb = Math.floor(b / H * 200) / 200;
+  if (t / H < 0.07) ct = 0; if ((b + 1) / H > 0.93) cb = 1;   // drobné okraje neořezávat
+  const key = ct.toFixed(3) + "-" + cb.toFixed(3);
+  if (key === lpCrop) return lpApplyCrop(ct, cb);         // jen přepočet (mohlo se změnit rozlišení)
+  if (key === lpCand) lpApplyCrop(ct, cb);
+  lpCand = key;
+}
 const loadMpegts = () => lpLib ||= new Promise((res, rej) => {
   const sc = document.createElement("script"); sc.src = LP_LIB;
   sc.onload = () => res(window.mpegts); sc.onerror = () => { lpLib = null; rej(new Error("mpegts.js")); };
@@ -432,7 +478,7 @@ const loadMpegts = () => lpLib ||= new Promise((res, rej) => {
 });
 function lpMsg(html) { const m = $("#lp-msg"); m.innerHTML = html || ""; m.classList.toggle("show", !!html); }
 function lpDestroy() {
-  clearTimeout(lpRetry);
+  clearTimeout(lpRetry); clearInterval(lpScanTimer);
   if (lp) { try { lp.pause(); lp.unload(); lp.detachMediaElement(); lp.destroy(); } catch {} lp = null; }
 }
 function stopLive() { lpSeq++; lpGen++; lpDestroy(); lpUrl = ""; lpFails = 0; lpMsg(""); $("#livebox").hidden = true; }
@@ -469,9 +515,29 @@ async function renderLive(s, streams) {
     });
     lp.attachMediaElement(video); lp.load();
     const pr = video.play(); if (pr) pr.catch(() => {});
+    lpScanTimer = setInterval(lpScan, 2000);
   };
+  lpCand = ""; lpApplyCrop(0, 1);
   start();
 }
+
+(() => {   // vlastní ovládání přehrávače (nativní lišta by se při ořezu schovala pod okraj)
+  const v = $("#lp-video"), mute = $("#lp-mute"), play = $("#lp-play");
+  const sync = () => {
+    mute.textContent = v.muted ? "🔇" : "🔊";
+    mute.title = mute.ariaLabel = v.muted ? "Zapnout zvuk" : "Vypnout zvuk";
+    play.hidden = !v.paused || !lp;
+  };
+  ["play", "pause", "volumechange", "emptied", "playing"].forEach(e => v.addEventListener(e, sync));
+  mute.addEventListener("click", () => { v.muted = !v.muted; if (v.paused) v.play().catch(() => {}); });
+  play.addEventListener("click", () => v.play().catch(() => {}));
+  $("#lp-fs").addEventListener("click", () => {
+    const f = $("#lp-frame");
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (f.requestFullscreen) f.requestFullscreen().catch(() => {});
+    else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();          // iPhone
+  });
+})();
 
 async function refresh() {
   try {
