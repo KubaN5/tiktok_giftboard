@@ -226,6 +226,15 @@ Sběrač **nemůže běžet na Netlify** (Functions mají časový limit, spojen
 - Test: `/home/claude/tests/test_merge.py` (3 díly + prázdný pokus, různé rozměry, jeden díl, bez overlaye, YouTube).
 - Watch: po chybě (ConnectTimeout…) jednou „spojení s TikTokem zase funguje – nevysílá, hlídám dál“.
 
+## Overlay – změna rozlišení při duelu (25. 11. 2026)
+- TikTok posílá při duelu obraz v jiném rozlišení (24. 11.: video 640×1280, při duelu 720×1280 – log „okna bitvy 720×652“).
+  1) `detect_layout` bral okna v rozměru snímku při duelu → pruh bitvy přesahoval vpravo (chyběly modré body, z „WIN“ jen „W“).
+     Oprava: `showinfo` vrátí rozměr snímku v tu chvíli, okna se přepočtou do výstupu (stejně jako scale+pad), ořez na w×h.
+  2) Změna rozlišení uprostřed dílu → ffmpeg znovu sestavil filtry, setpts začal od N=0/STARTPTS a další snímky zahodil
+     (v testu video po změně skončilo). Oprava: `-reinit_filter 0`, `scale … :eval=frame` a `pad … :eval=frame` na začátku
+     řetězce (před setpts/fps) – filtry zůstanou, každý snímek se zmenší/doplní na pevný rozměr.
+- Test: `/tmp/res/mix.ts` (6 s 640×1280 + 6 s 720×1280 s okny bitvy) → okna (0, 350, 640, 580), 12 s obrazu, pruh celý.
+
 ## Nápady na další úpravy (nic z toho není rozhodnuté)
 - Detail dárce (historie darů, nejčastější dar), přehled podle typu daru.
 - Supabase Realtime místo pollingu každých 10 s.

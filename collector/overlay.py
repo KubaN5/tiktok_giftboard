@@ -505,22 +505,29 @@ def parse_battles(events: list[dict]) -> list[dict]:
 
 def detect_layout(ffmpeg: str, video: Path, times: list[float], w: int, h: int) -> tuple[int, int, int, int] | None:
     """Kde jsou v obraze okna bitvy (černé pruhy nad/pod nimi) – ffmpeg cropdetect v několika okamžicích bitvy."""
+    # TikTok během duelu posílá obraz v jiném rozlišení (24. 11.: video 640×1280, při duelu 720×1280) – rozměr
+    # snímku v tu chvíli zjistí showinfo a okna se přepočítají do výstupního obrazu (w×h) stejně, jako ho
+    # zmenší/doplní filtr scale+pad v main(). Jinak pruh bitvy přesahoval vpravo z obrazu (chyběly body a „WIN“).
     boxes = []
     for t in times[:4]:
         r = subprocess.run([ffmpeg, "-hide_banner", "-ss", f"{max(t, 0):.2f}", "-i", str(video), "-t", "2",
-                            "-vf", "cropdetect=limit=24:round=2:reset=0", "-f", "null", "-"],
+                            "-vf", "showinfo,cropdetect=limit=24:round=2:reset=0", "-f", "null", "-"],
                            capture_output=True, text=True, errors="replace")
         found = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", r.stderr)
+        sizes = re.findall(r"\bs:(\d+)x(\d+)", r.stderr)
         if found:
             cw, ch, cx, cy = map(int, found[-1])
-            if ch < h * 0.92 and cw > w * 0.6 and ch > h * 0.2:
-                boxes.append((cx, cy, cw, ch))
+            fw, fh = map(int, sizes[-1]) if sizes else (w, h)
+            if ch < fh * 0.92 and cw > fw * 0.6 and ch > fh * 0.2:
+                k = min(w / fw, h / fh)
+                ox, oy = (w - fw * k) / 2, (h - fh * k) / 2
+                boxes.append((cx * k + ox, cy * k + oy, cw * k, ch * k))
     if not boxes:
         return None
-    x0 = min(b[0] for b in boxes)
-    y0 = min(b[1] for b in boxes)
-    x1 = max(b[0] + b[2] for b in boxes)
-    y1 = max(b[1] + b[3] for b in boxes)
+    x0 = max(0, round(min(b[0] for b in boxes)))
+    y0 = max(0, round(min(b[1] for b in boxes)))
+    x1 = min(w, round(max(b[0] + b[2] for b in boxes)))
+    y1 = min(h, round(max(b[1] + b[3] for b in boxes)))
     return x0, y0, x1 - x0, y1 - y0
 
 
@@ -755,9 +762,12 @@ def main() -> None:
         # fps=30: setpts mění jen čas snímku, ne jeho délku – a novější ffmpeg nesmyslnou délku z poškozeného snímku
         # předá kodéru („Application provided duration … invalid“). Filtr fps skládá výstup jen podle času
         # a každému snímku nastaví délku přesně 1/30 s (zároveň srovná proměnlivou snímkovou frekvenci TikToku).
-        vf = (f"{fix_pts},fps=30,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
-              "setsar=1,ass=overlay.ass")
-        cmd += ["-i", str(video), "-vf", vf]
+        # -reinit_filter 0 + scale eval=frame: při změně rozlišení uprostřed videa (duel) ffmpeg jinak filtry sestaví
+        # znovu, setpts začne od nuly (N=0, STARTPTS) a všechny další snímky zahodí jako „pozdě“ – obraz skončil.
+        # Takhle filtry zůstanou, scale si každý snímek sám zmenší/doplní na pevný rozměr w×h.
+        vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease:eval=frame,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:eval=frame,"
+              f"setsar=1,{fix_pts},fps=30,ass=overlay.ass")
+        cmd += ["-reinit_filter", "0", "-i", str(video), "-vf", vf]
         if a.frame is not None:
             cmd += ["-ss", f"{lead:.3f}", "-frames:v", "1", "-update", "1", str(out)]
         else:
