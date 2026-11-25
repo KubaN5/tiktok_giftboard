@@ -738,3 +738,92 @@ revoke all on function public.live_player(text)                            from 
 grant execute on function public.set_play_url(bigint, text)                to service_role;
 grant execute on function public.collector_play_url(text, bigint, text)    to anon;
 grant execute on function public.live_player(text)                         to anon, authenticated;
+
+-- ---------------------------------------------------------------- živé dění u přehrávače (od 25. 11.)
+-- Komentáře, dary, duely (skóre, odpočet, top podporovatelé) z běžícího LIVE. Sběrač zapisuje po dávkách á 1 s,
+-- web čte live_feed() á 2 s. Jen dočasně: řádky starší než 1 den se mažou při zápisu.
+create table if not exists public.live_feed (
+    id          bigint generated always as identity primary key,
+    stream_id   bigint      not null references public.streams(id) on delete cascade,
+    ts          timestamptz not null default now(),     -- čas události podle TikToku (create_time), jinak příjem
+    kind        text        not null check (kind in ('comment', 'gift', 'battle', 'score', 'owner')),
+    data        jsonb       not null
+);
+create index if not exists live_feed_stream_id on public.live_feed (stream_id, id);
+create index if not exists live_feed_ts on public.live_feed (ts);
+alter table public.live_feed enable row level security;
+
+-- p_rows: [{stream_id, kind, ts (ms od 1970), data}]; vrací počet zapsaných
+create or replace function public._add_live_feed(p_rows jsonb)
+returns integer
+language plpgsql volatile security definer set search_path = public as $$
+declare n integer;
+begin
+    if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 500 then
+        raise exception 'p_rows: čekám pole s nejvýš 500 řádky' using errcode = '22023';
+    end if;
+    delete from live_feed where ts < now() - interval '1 day';
+    insert into live_feed (stream_id, ts, kind, data)
+    select (r->>'stream_id')::bigint,
+           coalesce(to_timestamp(nullif(r->>'ts', '')::double precision / 1000), now()),
+           r->>'kind', r->'data'
+    from jsonb_array_elements(p_rows) r
+    join streams s on s.id = (r->>'stream_id')::bigint and s.ended_at is null
+    where r->>'kind' in ('comment', 'gift', 'battle', 'score', 'owner')
+      and jsonb_typeof(r->'data') = 'object' and length((r->'data')::text) < 8000;
+    get diagnostics n = row_count;
+    return n;
+end $$;
+
+create or replace function public.add_live_feed(p_rows jsonb)          -- sběrač vlastníka (secret klíč)
+returns integer language sql volatile security definer set search_path = public as $$
+    select _add_live_feed(p_rows);
+$$;
+
+create or replace function public.collector_live_feed(p_token text, p_rows jsonb)
+returns integer
+language plpgsql volatile security definer set search_path = public as $$
+declare s text;
+begin
+    for s in select distinct st.streamer from jsonb_array_elements(p_rows) r
+             join streams st on st.id = (r->>'stream_id')::bigint loop
+        perform _collector_auth(p_token, s);
+    end loop;
+    if s is null then perform _collector_auth(p_token); end if;
+    return _add_live_feed(p_rows);
+end $$;
+
+-- Pro web: běžící vysílání účtu. p_after = 0 -> výchozí stav (hostitel, poslední duel + skóre, 30 posledních
+-- komentářů/darů), jinak vše novější než p_after. Řádek kind = 'now' nese čas serveru (srovnání hodin).
+create or replace function public.live_feed(p_streamer text, p_after bigint default 0)
+returns table (id bigint, stream_id bigint, ts timestamptz, kind text, data jsonb)
+language sql stable security definer set search_path = public as $$
+    with st as (
+        select s.id from streams s
+        where s.streamer = lower(ltrim(p_streamer, '@')) and s.ended_at is null
+        order by s.started_at desc limit 1
+    ),
+    rows as (
+        select f.* from live_feed f join st on f.stream_id = st.id
+        where coalesce(p_after, 0) > 0 and f.id > p_after
+        union all
+        select * from (select f.* from live_feed f join st on f.stream_id = st.id
+                       where coalesce(p_after, 0) = 0 and f.kind in ('comment', 'gift')
+                       order by f.id desc limit 30) a
+        union all
+        select * from (select distinct on (f.kind) f.* from live_feed f join st on f.stream_id = st.id
+                       where coalesce(p_after, 0) = 0 and f.kind in ('owner', 'battle', 'score')
+                       order by f.kind, f.id desc) b
+    )
+    select 0::bigint, null::bigint, now(), 'now'::text, '{}'::jsonb
+    union all
+    select * from (select r.id, r.stream_id, r.ts, r.kind, r.data from rows r order by r.id limit 500) x;
+$$;
+
+revoke all on function public._add_live_feed(jsonb)                       from public, anon, authenticated;
+revoke all on function public.add_live_feed(jsonb)                        from public, anon, authenticated;
+revoke all on function public.collector_live_feed(text, jsonb)            from public, anon, authenticated;
+revoke all on function public.live_feed(text, bigint)                     from public, anon, authenticated;
+grant execute on function public.add_live_feed(jsonb)                     to service_role;
+grant execute on function public.collector_live_feed(text, jsonb)         to anon;
+grant execute on function public.live_feed(text, bigint)                  to anon, authenticated;

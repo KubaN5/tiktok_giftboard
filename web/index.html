@@ -135,7 +135,7 @@
   /* video je vždy 9:16; černé pruhy nahoře/dole (co-host) se oříznou posunem (top) a poměrem stran rámečku */
   .lp-frame video { position:absolute; left:0; top:0; display:block; width:100%; height:auto; aspect-ratio:9/16; background:#000; }
   .lp-frame:fullscreen video { position:static; width:100%; height:100%; aspect-ratio:auto; object-fit:contain; }
-  .lp-ctl { position:absolute; right:8px; bottom:8px; display:flex; gap:6px; z-index:2; }
+  .lp-ctl { position:absolute; right:8px; bottom:8px; display:flex; flex-direction:column; gap:6px; z-index:3; }
   .lp-ctl button { width:38px; height:38px; padding:0; display:grid; place-items:center; border-radius:50%; cursor:pointer;
                    background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.25); color:#fff; font-size:17px; line-height:1; }
   .lp-ctl button:hover { border-color:var(--acc); }
@@ -147,6 +147,57 @@
   .lp-msg.show { display:flex; }
   .lp-msg a { color:#fff; background:var(--acc); padding:8px 14px; border-radius:8px; text-decoration:none; font-weight:700; }
   .lp-note { margin:8px 2px 0; color:var(--muted); font-size:12px; text-align:center; }
+  /* živé dění: komentáře, dary, duel */
+  .lp-body { position:relative; }
+  .av-s { flex:none; width:28px; height:28px; border-radius:50%; overflow:hidden; display:grid; place-items:center; position:relative;
+          background:linear-gradient(145deg,#3a3f4b,#262a33); color:#cfd3da; font-size:12px; font-weight:800; }
+  .av-s img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .lp-chat { display:none; position:relative; min-height:200px; background:#12141a; border:1px solid var(--line); border-radius:8px; }
+  .lp-chat h3 { margin:0; padding:8px 10px; font-size:13px; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line); }
+  .lp-chat ul { position:absolute; inset:35px 0 0; margin:0; padding:6px 8px; list-style:none; overflow-y:auto; scrollbar-width:thin; }
+  .lp-chat .empty { padding:14px 4px; font-size:13px; }
+  .cm { display:flex; gap:8px; align-items:flex-start; padding:5px 0; font-size:13.5px; line-height:1.3; }
+  .cm .who { display:block; color:#a7adb8; font-weight:600; font-size:12.5px; overflow-wrap:anywhere; }
+  .cm .txt { display:block; color:var(--fg); overflow-wrap:anywhere; }
+  .lp-ochat { display:none; position:absolute; left:8px; right:58px; bottom:8px; z-index:1; margin:0; padding:0; list-style:none; pointer-events:none;
+              -webkit-mask-image:linear-gradient(to bottom, transparent 0, #000 28%); mask-image:linear-gradient(to bottom, transparent 0, #000 28%); }
+  .lp-ochat .cm { padding:3px 0; font-size:13px; text-shadow:0 1px 2px rgba(0,0,0,.9); }
+  .lp-ochat .cm .who { color:rgba(255,255,255,.75); } .lp-ochat .av-s { width:24px; height:24px; }
+  .lp-gifts { position:absolute; left:8px; bottom:12px; z-index:2; display:flex; flex-direction:column; gap:6px; pointer-events:none; max-width:78%; }
+  .gb { display:flex; align-items:center; gap:7px; padding:3px 10px 3px 3px; border-radius:999px; background:linear-gradient(90deg, rgba(254,44,85,.85), rgba(0,0,0,.45));
+        color:#fff; font-size:12.5px; line-height:1.2; box-shadow:0 2px 8px rgba(0,0,0,.35); animation:gbin .25s ease-out; }
+  .gb .t { min-width:0; } .gb .t b { display:block; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .gb .t span { display:block; font-size:11.5px; opacity:.9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; }
+  .gb .gi { width:34px; height:34px; flex:none; display:grid; place-items:center; font-size:22px; }
+  .gb .gi img { width:100%; height:100%; object-fit:contain; }
+  .gb .x { font-size:20px; font-weight:900; font-style:italic; text-shadow:0 2px 0 rgba(0,0,0,.35); white-space:nowrap; }
+  @keyframes gbin { from { transform:translateX(-20px); opacity:0; } to { transform:none; opacity:1; } }
+  .lp-battle { position:absolute; left:6px; right:6px; top:6px; z-index:2; pointer-events:none; }
+  .lp-battle[hidden] { display:none; }
+  .bt-bar { position:relative; display:flex; height:22px; border-radius:11px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,.4);
+            font-size:15px; font-weight:900; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.45); font-variant-numeric:tabular-nums; }
+  .bt-l { background:linear-gradient(90deg,#ff2d6f,#ff6f9c); transition:width .6s ease; display:flex; align-items:center; padding-left:9px; min-width:0; }
+  .bt-r { flex:1; background:linear-gradient(90deg,#4fc3ff,#2f8cff); display:flex; align-items:center; justify-content:flex-end; padding-right:9px; min-width:0; }
+  .bt-mid { display:flex; justify-content:space-between; align-items:flex-start; margin-top:5px; }
+  .bt-top { display:flex; gap:4px; }
+  .bt-top .av-s { width:26px; height:26px; box-shadow:0 0 0 2px var(--side); overflow:visible; }
+  .bt-top .av-s img { border-radius:50%; }
+  .bt-top .av-s i { position:absolute; right:-3px; bottom:-3px; z-index:1; width:13px; height:13px; border-radius:50%; background:var(--side);
+                    color:#fff; font-size:9px; font-style:normal; font-weight:900; display:grid; place-items:center; }
+  .bt-time { padding:3px 10px; border-radius:8px; background:rgba(0,0,0,.6); color:#fff; font-size:14px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .bt-time.win { background:linear-gradient(90deg,#ff2d6f,#ff9a3c); } .bt-time.lose { background:#3d4350; } .bt-time.draw { background:#6b5fd1; }
+  @media (min-width:761px) {   /* počítač: komentáře v panelu vpravo od videa */
+    .lp { max-width:700px; } .lp.wide { max-width:none; }
+    .lp-body { display:grid; grid-template-columns:minmax(0,1fr) 270px; gap:10px; align-items:stretch; }
+    .lp-chat { display:block; }
+  }
+  @media (max-width:760px) {   /* mobil: komentáře přes video dole (jako v aplikaci TikTok) */
+    .lp-ochat { display:flex; flex-direction:column; justify-content:flex-end; max-height:36%; overflow:hidden; }
+    .lp-ochat .cm { font-size:12px; padding:2px 0; } .lp-ochat .cm .who { font-size:11px; }
+    .lp-gifts { bottom:auto; top:max(64px, 22%); gap:4px; }
+    .lp-gifts .gb:nth-last-child(n+3) { display:none; }   /* na mobilu nejvýš 2 bubliny */
+    .gb { font-size:11.5px; } .gb .gi { width:28px; height:28px; } .gb .x { font-size:17px; } .gb .av-s { width:24px; height:24px; }
+  }
   .cov .okfold .row:first-of-type { border-top:1px solid var(--line); margin-top:8px; }
 </style>
 </head>
@@ -187,11 +238,17 @@
   <div class="gapnote" id="gapnote"></div>
   <section class="lp" id="livebox" hidden aria-label="Živé vysílání">
     <div class="lp-head"><span class="live">LIVE</span><span>Právě vysílá</span><a id="lp-link" href="#" target="_blank" rel="noopener noreferrer">Otevřít na TikToku ↗</a></div>
-    <div class="lp-frame" id="lp-frame"><video id="lp-video" muted autoplay playsinline></video>
-      <button class="lp-play" id="lp-play" hidden aria-label="Přehrát">▶</button>
-      <div class="lp-ctl"><button id="lp-mute" title="Zapnout zvuk" aria-label="Zapnout zvuk">🔇</button><button id="lp-fs" title="Celá obrazovka" aria-label="Celá obrazovka">⛶</button></div>
-      <div class="lp-msg" id="lp-msg"></div></div>
-    <div class="lp-note">Zvuk zapneš tlačítkem 🔇. Dárky a komentáře jen přímo na TikToku.</div>
+    <div class="lp-body">
+      <div class="lp-frame" id="lp-frame"><video id="lp-video" muted autoplay playsinline></video>
+        <div class="lp-battle" id="lp-battle" hidden></div>
+        <ul class="lp-ochat" id="lp-ochat"></ul>
+        <div class="lp-gifts" id="lp-gifts"></div>
+        <button class="lp-play" id="lp-play" hidden aria-label="Přehrát">▶</button>
+        <div class="lp-ctl"><button id="lp-mute" title="Zapnout zvuk" aria-label="Zapnout zvuk">🔇</button><button id="lp-fs" title="Celá obrazovka" aria-label="Celá obrazovka">⛶</button></div>
+        <div class="lp-msg" id="lp-msg"></div></div>
+      <div class="lp-chat"><h3>Komentáře</h3><ul id="lp-chat"></ul></div>
+    </div>
+    <div class="lp-note">Zvuk zapneš tlačítkem 🔇. Psát komentáře a posílat dárky jde jen přímo na TikToku.</div>
   </section>
   <div class="podium" id="podium"></div>
   <div class="search"><input id="q" type="search" placeholder="Hledat dárce (jméno nebo @účet)…" autocomplete="off" enterkeyhint="search"><small id="qinfo"></small></div>
@@ -481,7 +538,7 @@ function lpDestroy() {
   clearTimeout(lpRetry); clearInterval(lpScanTimer);
   if (lp) { try { lp.pause(); lp.unload(); lp.detachMediaElement(); lp.destroy(); } catch {} lp = null; }
 }
-function stopLive() { lpSeq++; lpGen++; lpDestroy(); lpUrl = ""; lpFails = 0; lpMsg(""); $("#livebox").hidden = true; }
+function stopLive() { lpSeq++; lpGen++; lpDestroy(); feedStop(); lpUrl = ""; lpFails = 0; lpMsg(""); $("#livebox").hidden = true; }
 async function renderLive(s, streams) {
   if (period !== "last" || streamId || !streams[0] || streams[0].ended_at) return stopLive();
   const my = ++lpSeq;
@@ -492,6 +549,7 @@ async function renderLive(s, streams) {
   const link = `https://www.tiktok.com/@${encodeURIComponent(s)}/live`;
   $("#lp-link").href = link;
   $("#livebox").hidden = false;
+  feedStart(s);
   if (info.play_url === lpUrl) return;                 // už hraje (nebo to po chybách vzdal)
   lpDestroy(); lpUrl = info.play_url; lpFails = 0; lpMsg("");
   const gen = ++lpGen;
@@ -519,6 +577,131 @@ async function renderLive(s, streams) {
   };
   lpCand = ""; lpApplyCrop(0, 1);
   start();
+}
+
+// Živé dění u videa: komentáře, dary, duel. Sběrač je zapisuje do live_feed, web je čte á 2 s a ukazuje se zpožděním,
+// aby seděly k obrazu (video z CDN jde pozadu): čas události (TikTok) + FEED_DELAY + vyrovnávací paměť přehrávače.
+const FEED_DELAY = 3;
+const COMMENTS_MAX = 60, OCHAT_MAX = 5, GIFTS_MAX = 3, GIFT_SHOW_MS = 5000;
+let fd = null, fdPoll = null, fdTick = null, chatStick = true;   // chatStick: držet komentáře na nejnovějším
+$("#lp-chat").addEventListener("scroll", e => {                     // odscrolluje-li divák nahoru, nepřeskakovat
+  const c = e.target; chatStick = c.scrollHeight - c.scrollTop - c.clientHeight < 30;
+});
+const extImg = (src, cls = "") => src && /^https:\/\//.test(src)
+  ? `<img src="${esc(src)}" alt="" class="${cls}" referrerpolicy="no-referrer" loading="lazy" onerror="this.remove()">` : "";
+const initial = s => esc(([...String(s || "?").replace(/^[^\p{L}\p{N}]+/u, "")][0] || "?").toUpperCase());
+const avS = (src, name, extra = "") => `<span class="av-s">${initial(name)}${extImg(src)}${extra}</span>`;
+function feedNew(streamer) {
+  return { streamer, sid: null, after: 0, off: 0, busy: false, pending: [], comments: [], gifts: new Map(), battle: null,
+           owner: null, html: { chat: null, ochat: null, gifts: null, battle: null } };
+}
+function feedStart(s) {
+  if (fd && fd.streamer === s) return;
+  feedStop(); fd = feedNew(s); chatStick = true;
+  feedPoll(); fdPoll = setInterval(feedPoll, 2000); fdTick = setInterval(feedTick, 250);
+}
+function feedStop() {
+  clearInterval(fdPoll); clearInterval(fdTick); fdPoll = fdTick = null; fd = null;
+  $("#lp-chat").innerHTML = ""; $("#lp-ochat").innerHTML = ""; $("#lp-gifts").innerHTML = "";
+  $("#lp-battle").hidden = true; $("#lp-battle").innerHTML = "";
+}
+async function feedPoll() {
+  const f = fd; if (!f || f.busy) return;
+  f.busy = true;
+  try {
+    const rows = await rpc("live_feed", { p_streamer: f.streamer, p_after: f.after });
+    if (f !== fd) return;
+    for (const r of rows) {
+      const t = new Date(r.ts).getTime();
+      if (r.kind === "now") { f.off = t - Date.now(); continue; }
+      if (f.sid !== null && r.stream_id !== f.sid) {          // nové vysílání: začít načisto
+        Object.assign(f, { pending: [], comments: [], battle: null, owner: null }); f.gifts.clear();
+      }
+      f.sid = r.stream_id; f.after = Math.max(f.after, r.id);
+      f.pending.push({ ...r, t });
+    }
+    f.pending.sort((a, b) => a.t - b.t || a.id - b.id);
+  } catch (e) { console.warn(e); } finally { f.busy = false; }
+}
+function feedApply(f, r, due) {
+  const d = r.data || {};
+  if (r.kind === "comment") {
+    f.comments.push(d); if (f.comments.length > COMMENTS_MAX) f.comments.shift();
+  } else if (r.kind === "gift") {
+    if (due - r.t > 15000) return;                          // staré dary (výchozí stav) bublinu neukazují
+    const key = d.uid + "|" + d.gift_id;                    // rozpracovaná série (x1, x2, …) se přepisuje
+    f.gifts.delete(key);
+    f.gifts.set(d.streak ? key : key + "|" + r.id, { ...d, at: Date.now() });   // hotový / samostatný dar
+    while (f.gifts.size > GIFTS_MAX) f.gifts.delete(f.gifts.keys().next().value);
+  } else if (r.kind === "owner") {
+    f.owner = String(d.id || "");
+  } else if (r.kind === "battle") {
+    const act = String(d.action || "");
+    const fin = act === "FINISH" || act.includes("CUT_SHORT");
+    if (!fin && act !== "OPEN" && act !== "ACCEPT") return;   // pozvánky, odmítnutí apod.
+    let b = f.battle;
+    if (!b || b.id !== d.battle_id) {
+      if (fin) return;                                        // konec duelu, jehož začátek jsme neviděli
+      b = f.battle = { id: d.battle_id, end: null, scores: {}, top: {}, anchors: {}, result: null, finished: null };
+    }
+    const end = d.end_ms || (d.start_ms && d.duration ? d.start_ms + 1000 * d.duration : 0);
+    if (end && !b.end) b.end = end;
+    if (d.anchors) Object.assign(b.anchors, d.anchors);
+    if (d.scores && Object.keys(d.scores).length) b.scores = { ...b.scores, ...d.scores };
+    if (d.top && Object.keys(d.top).length) b.top = { ...b.top, ...d.top };
+    if (fin) { b.finished = r.t; b.result = d.result || {}; }
+  } else if (r.kind === "score") {
+    let b = f.battle;
+    if (!b || b.id !== d.battle_id) b = f.battle = { id: d.battle_id, end: null, scores: {}, top: {}, anchors: {}, result: null, finished: null };
+    if (b.finished) return;
+    b.scores = { ...b.scores, ...(d.scores || {}) };
+    if (d.top && Object.keys(d.top).length) b.top = { ...b.top, ...d.top };
+  }
+}
+function setHtml(f, key, el, html) { if (f.html[key] !== html) { el.innerHTML = f.html[key] = html; return true; } return false; }
+const commentHtml = c => `<li class="cm">${avS(c.av, c.nick || c.user)}<span><span class="who">${esc(c.nick || c.user || "")}</span><span class="txt">${esc(c.text || "")}</span></span></li>`;
+const mmss = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+function battleHtml(f, due) {
+  const b = f.battle;
+  if (!b) return "";
+  if (b.finished ? due - b.finished > 12000 : (b.end && due > b.end + 90000)) return "";   // dávno po konci
+  const ids = [...new Set([...Object.keys(b.scores), ...Object.keys(b.anchors), ...Object.keys(b.result || {})])];
+  if (ids.length < 2) return "";
+  const byName = Object.keys(b.anchors).find(k => (b.anchors[k].display_id || "").toLowerCase() === f.streamer);
+  const ours = ids.includes(f.owner) ? f.owner : byName || ids[0];
+  const sc = id => Number((b.finished && b.result?.[id]?.score) ?? b.scores[id] ?? 0);
+  const opp = ids.filter(x => x !== ours).sort((x, y) => sc(y) - sc(x))[0];
+  const L = sc(ours), R = sc(opp);
+  const pct = L + R ? Math.min(88, Math.max(12, 100 * L / (L + R))) : 50;
+  let time;
+  if (b.finished) {
+    const [cls, txt] = L > R ? ["win", "VÝHRA"] : L < R ? ["lose", "PROHRA"] : ["draw", "REMÍZA"];
+    time = `<span class="bt-time ${cls}">${txt}</span>`;
+  } else time = b.end ? `<span class="bt-time">⚔ ${mmss(b.end - due)}</span>` : `<span class="bt-time">⚔</span>`;
+  const top = (id, color) => `<span class="bt-top" style="--side:${color}">${(b.top[id] || []).slice(0, 3)
+      .map((u, i) => avS(u.av, u.nick, `<i>${i + 1}</i>`)).join("")}</span>`;
+  return `<div class="bt-bar"><span class="bt-l" style="width:${pct.toFixed(1)}%">${fmt(L)}</span><span class="bt-r">${fmt(R)}</span></div>
+    <div class="bt-mid">${top(ours, "#ff2d6f")}${time}${top(opp, "#2f8cff").replace('class="bt-top"', 'class="bt-top" dir="rtl"')}</div>`;
+}
+function feedTick() {
+  const f = fd; if (!f) return;
+  const v = $("#lp-video");
+  let buf = 0;
+  try { if (v.buffered.length) buf = Math.max(0, Math.min(10, v.buffered.end(v.buffered.length - 1) - v.currentTime)); } catch {}
+  const due = Date.now() + f.off - (FEED_DELAY + buf) * 1000;   // „čas obrazu“ podle hodin TikToku
+  let n = 0;
+  while (f.pending.length && f.pending[0].t <= due && n++ < 200) feedApply(f, f.pending.shift(), due);
+  for (const [k, g] of f.gifts) if (Date.now() - g.at > GIFT_SHOW_MS) f.gifts.delete(k);
+  const chat = $("#lp-chat");
+  const chatHtml = f.comments.length ? f.comments.map(commentHtml).join("") : '<li class="empty">Zatím žádné komentáře – objeví se, jak budou přicházet.</li>';
+  if (setHtml(f, "chat", chat, chatHtml) && chatStick) chat.scrollTop = chat.scrollHeight;
+  setHtml(f, "ochat", $("#lp-ochat"), f.comments.slice(-OCHAT_MAX).map(commentHtml).join(""));
+  setHtml(f, "gifts", $("#lp-gifts"), [...f.gifts.values()].map(g => `<div class="gb">${avS(g.av, g.nick || g.user)}
+      <span class="t"><b>${esc(g.nick || g.user || "")}</b><span>poslal(a) ${esc(g.gift || "dar")}</span></span>
+      <span class="gi">${extImg(g.img) || "🎁"}</span><span class="x">×${fmt(g.count || 1)}</span></div>`).join(""));
+  const bh = battleHtml(f, due);
+  setHtml(f, "battle", $("#lp-battle"), bh);
+  $("#lp-battle").hidden = !bh;
 }
 
 (() => {   // vlastní ovládání přehrávače (nativní lišta by se při ořezu schovala pod okraj)

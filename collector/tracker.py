@@ -84,6 +84,11 @@ def norm(username: str) -> str:
     return username.strip().lstrip("@").lower()
 
 
+def env_feed() -> bool:
+    """LIVE_FEED: posílat komentáře / dary / duely pro přehrávač na webu (výchozí zapnuto)."""
+    return (os.getenv("LIVE_FEED") or "1").strip().lower() not in ("0", "off", "no", "ne", "false")
+
+
 def env_on(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "ano")
 
@@ -115,6 +120,14 @@ def gift_image_url(gift) -> str | None:
     return image_url(gift, ("image", "icon", "preview_image"))
 
 
+def army_top(army, n: int = 3) -> list[dict]:
+    """Top podporovatelé jedné strany duelu (BattleUserArmies.user_armies) – pro web."""
+    users = sorted(getattr(army, "user_armies", None) or [], key=lambda u: -int(getattr(u, "score", 0) or 0))[:n]
+    return [{"uid": getattr(u, "user_id_str", "") or str(getattr(u, "user_id", "") or ""),
+             "nick": getattr(u, "nickname", "") or "", "av": image_url(u, ("avatar_thumb",)),
+             "score": int(getattr(u, "score", 0) or 0)} for u in users]
+
+
 # --------------------------------------------------------------------------
 # Supabase (PostgREST) úložiště
 # --------------------------------------------------------------------------
@@ -140,6 +153,8 @@ class Store:
         self.image_q: asyncio.Queue[tuple[str, str, str]] = asyncio.Queue(maxsize=500)   # (druh, klíč, adresa)
         self.image_done: dict[tuple[str, str], float] = {}   # (druh, klíč) -> kdy naposledy (i neúspěšně) zpracováno
         self.image_logged: set[str] = set()                   # do logu jen první úspěch / chyba za druh a běh
+        # Živé dění pro web (komentáře, dary, duely) – jen dočasné, při dlouhém výpadku se zahazuje
+        self.feed_q: asyncio.Queue[dict] = asyncio.Queue(maxsize=3000)
 
     async def _req(self, method: str, path: str, **kw) -> httpx.Response:
         r = await self.http.request(method, path, **kw)
@@ -287,6 +302,52 @@ class Store:
                     log.log(logging.WARNING if first else logging.DEBUG, label[1] + ": %s", key, ex)
                     self.image_logged.add(f"{kind}:err")
                     self.image_done[(kind, key)] = time.time() - refresh + 600   # další pokus nejdřív za 10 min
+
+    def add_feed(self, stream_id: int | None, kind: str, data: dict, ts_ms: int | None = None) -> None:
+        """Událost pro přehrávač na webu (comment / gift / battle / score / owner)."""
+        if stream_id is None:
+            return
+        try:
+            self.feed_q.put_nowait({"stream_id": stream_id, "kind": kind, "data": data,
+                                    "ts": int(ts_ms or time.time() * 1000)})
+        except asyncio.QueueFull:
+            pass
+
+    async def feed_writer(self) -> None:
+        """Posílá živé dění pro web po dávkách á 1 s. Je to jen pro diváky živě – po 3 neúspěšných
+        pokusech se dávka zahodí (dary se tím nijak neovlivní, ty jdou vlastní frontou)."""
+        warned = False
+        while True:
+            batch = [await self.feed_q.get()]
+            await asyncio.sleep(1)
+            while not self.feed_q.empty() and len(batch) < 400:
+                batch.append(self.feed_q.get_nowait())
+            # průběh série darů (x1, x2, …): z jedné dávky stačí poslední stav stejného daru od stejného dárce
+            later: set[tuple] = set()
+            keep = []
+            for r in reversed(batch):
+                if r["kind"] == "gift":
+                    key = (r["data"].get("uid"), r["data"].get("gift_id"))
+                    if r["data"].get("streak") and key in later:
+                        continue
+                    later.add(key)
+                keep.append(r)
+            batch = keep[::-1]
+            for attempt in range(3):
+                try:
+                    if self.token:
+                        await self._rpc("collector_live_feed", p_rows=batch)
+                    else:
+                        await self._req("POST", "/rpc/add_live_feed", json={"p_rows": batch})
+                    warned = False
+                    break
+                except Exception as ex:
+                    if attempt == 2:
+                        log.log(logging.DEBUG if warned else logging.WARNING,
+                                "Živé dění pro web (%s událostí) se nepodařilo odeslat: %s", len(batch), ex)
+                        warned = True
+                    else:
+                        await asyncio.sleep(2)
 
     async def writer(self) -> None:
         """Na pozadí posílá dary po dávkách; při chybě to zkusí znovu."""
@@ -1036,6 +1097,11 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                         await store.set_room_start(stream_id, started)
                 except Exception as ex:
                     log.debug("@%s: začátek vysílání se nepodařilo zjistit: %s", streamer, ex)
+                owner = info.get("owner") or {}
+                if owner and feed_on:                       # kdo je hostitelka (strana v duelu na webu)
+                    store.add_feed(stream_id, "owner", {"id": str(owner.get("id_str") or owner.get("id") or ""),
+                                                        "display_id": owner.get("display_id") or streamer,
+                                                        "nick": owner.get("nickname") or ""})
                 # video pro web: výchozí hd (540p) šetří data divákům; WEB_QUALITY=off přehrávač vypne
                 quality = (os.getenv("WEB_QUALITY") or "hd").strip().lower()
                 if quality in ("0", "off", "ne", "no"):
@@ -1063,6 +1129,13 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                                             stream_id=state["stream_id"], store=store)
                     state["rec"].start()
 
+            feed_on = env_feed()
+
+            def feed(kind: str, data: dict, ev=None) -> None:
+                if feed_on:
+                    st = getattr(getattr(ev, "common", None), "create_time", 0) if ev is not None else 0
+                    store.add_feed(state["stream_id"], kind, data, int(st) if st else None)
+
             def rec_event(data: dict, ev=None) -> None:
                 rec = state["rec"]
                 if rec is not None:
@@ -1075,6 +1148,8 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                     if ev.user is not None:
                         rec_event({"type": "comment", "user": ev.user.unique_id, "nick": ev.user.nickname,
                                    "text": ev.content}, ev)
+                        feed("comment", {"uid": str(ev.user.id), "user": ev.user.unique_id, "nick": ev.user.nickname,
+                                         "av": avatar_url(ev.user), "text": (ev.content or "")[:300]}, ev)
                 except Exception as ex:
                     log.debug("komentář: %s", ex)
 
@@ -1087,17 +1162,20 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                         u = getattr(w.value, "user", None) if w.value else None
                         if u is not None:
                             anchors[str(w.key)] = {"display_id": u.display_id, "nick": u.nick_name}
-                    rec_event({"type": "battle", "battle_id": str(ev.battle_id),
-                               "action": getattr(ev.action, "name", str(ev.action)),
-                               "start_ms": int(getattr(bs, "start_time_ms", 0) or 0) if bs else 0,
-                               "duration": int(getattr(bs, "duration", 0) or 0) if bs else 0,
-                               "end_ms": int(getattr(bs, "end_time_ms", 0) or 0) if bs else 0,
-                               "anchors": anchors,
-                               "scores": {str(w.key): int(w.value.hostscore) for w in ev.armies or [] if w.value},
-                               "result": {str(k): {"score": int(v.score), "result": getattr(v.result, "name", str(v.result))}
-                                          for k, v in (ev.battle_result or {}).items()},
-                               # série výher v řadě, jak ji počítá TikTok („WIN x8“)
-                               "combo": {str(k): int(v.combo_count) for k, v in (ev.battle_combo_v2 or {}).items()}}, ev)
+                    data = {"type": "battle", "battle_id": str(ev.battle_id),
+                            "action": getattr(ev.action, "name", str(ev.action)),
+                            "start_ms": int(getattr(bs, "start_time_ms", 0) or 0) if bs else 0,
+                            "duration": int(getattr(bs, "duration", 0) or 0) if bs else 0,
+                            "end_ms": int(getattr(bs, "end_time_ms", 0) or 0) if bs else 0,
+                            "anchors": anchors,
+                            "scores": {str(w.key): int(w.value.hostscore) for w in ev.armies or [] if w.value},
+                            "result": {str(k): {"score": int(v.score), "result": getattr(v.result, "name", str(v.result))}
+                                       for k, v in (ev.battle_result or {}).items()},
+                            # série výher v řadě, jak ji počítá TikTok („WIN x8“)
+                            "combo": {str(k): int(v.combo_count) for k, v in (ev.battle_combo_v2 or {}).items()}}
+                    rec_event(data, ev)
+                    top = {str(w.key): army_top(w.value) for w in ev.armies or [] if w.value}
+                    feed("battle", {**data, "top": {k: v for k, v in top.items() if v}}, ev)
                     action = getattr(ev.action, "name", str(ev.action))
                     label = {"OPEN": "Duel ZAČAL", "ACCEPT": "Duel ZAČAL", "FINISH": "Duel SKONČIL",
                              "LINK_MIC_BATTLE_BATTLE_ACTION_CUT_SHORT": "Duel SKONČIL (předčasně)"}.get(action,
@@ -1110,8 +1188,11 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
             @client.on(LinkMicArmiesEvent)
             async def _on_armies(ev: LinkMicArmiesEvent):
                 try:
-                    rec_event({"type": "score", "battle_id": str(ev.battle_id),
-                               "scores": {str(k): int(v.hostscore) for k, v in (ev.armies or {}).items()}}, ev)
+                    scores = {str(k): int(v.hostscore) for k, v in (ev.armies or {}).items()}
+                    rec_event({"type": "score", "battle_id": str(ev.battle_id), "scores": scores}, ev)
+                    top = {str(k): army_top(v) for k, v in (ev.armies or {}).items()}
+                    feed("score", {"battle_id": str(ev.battle_id), "scores": scores,
+                                   "top": {k: v for k, v in top.items() if v}}, ev)
                 except Exception as ex:
                     log.warning("@%s: skóre bitvy se nepodařilo zpracovat: %s", streamer, ex)
 
@@ -1124,6 +1205,10 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                                "nick": ev.user.nickname, "gift": ev.gift.name, "gift_id": ev.gift.id,
                                "count": max(int(ev.repeat_count or 1), 1), "unit": int(ev.gift.diamond_count or 0),
                                "streak": bool(ev.streaking)}, ev)
+                    feed("gift", {"uid": str(ev.user.id), "user": ev.user.unique_id, "nick": ev.user.nickname,
+                                  "av": avatar_url(ev.user), "gift": ev.gift.name, "gift_id": ev.gift.id,
+                                  "img": gift_image_url(ev.gift), "count": max(int(ev.repeat_count or 1), 1),
+                                  "unit": int(ev.gift.diamond_count or 0), "streak": bool(ev.streaking)}, ev)
                 except Exception as ex:
                     log.debug("dar do událostí: %s", ex)
                 # Streakovatelné dary (Rose…) chodí průběžně; počítá se až konec série,
@@ -1216,7 +1301,10 @@ async def run(usernames: list[str], interval: int) -> None:
         log.info("Přihlášen tokenem jako sběrač „%s“", token_name)
     log.info("Hlídám: %s (kontrola každých %ss)", ", ".join("@" + s for s in streamers), interval)
     name = token_name or (os.getenv("COLLECTOR_NAME") or socket.gethostname() or "sběrač").strip()[:60]
-    await asyncio.gather(store.writer(), store.image_worker(), store.heartbeat(name, streamers, bool(rec_cfg)),
+    feed = [store.feed_writer()] if env_feed() else []
+    if not feed:
+        log.info("Živé dění pro web (komentáře, dary, duely) vypnuto (LIVE_FEED=0)")
+    await asyncio.gather(store.writer(), store.image_worker(), store.heartbeat(name, streamers, bool(rec_cfg)), *feed,
                          weekly_visits_report(store),
                          *(watch(s, store, interval, rec_cfg) for s in streamers))
 
