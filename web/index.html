@@ -33,6 +33,10 @@
   .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   select, button { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
   .tabs button.on { border-color:var(--acc); color:#fff; background:#2a1820; }
+  .range[hidden] { display:none; }
+  .range label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:14px; }
+  .range input { background:var(--card); color:var(--fg); border:1px solid var(--acc); border-radius:8px; padding:7px 8px;
+                 font:inherit; color-scheme:dark; }
   main { max-width:900px; margin:auto; padding:8px 20px 40px; }
   .stats { display:flex; gap:10px; margin:12px 0; flex-wrap:wrap; }
   .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 14px; min-width:130px; }
@@ -138,6 +142,11 @@
       <button data-p="24h">24 h</button>
       <button data-p="today">Dnes</button>
       <button data-p="last">Poslední LIVE</button>
+      <button data-p="range">Vlastní období</button>
+    </div>
+    <div class="range bar" id="range" hidden>
+      <label>Od <input type="date" id="r-from" min="2026-11-24"></label>
+      <label>do <input type="date" id="r-to" min="2026-11-24"></label>
     </div>
     <select id="stream"><option value="">— konkrétní vysílání —</option></select>
   </div>
@@ -250,9 +259,24 @@ async function loadStreams() {
 // 24 h / 7 dní / 30 dní / Celkem = souhrn za období + jen vysílání s výpadkem (ostatní sbalená)
 const PERIOD_MS = { "24h": 864e5, "7d": 7 * 864e5, "30d": 30 * 864e5 };
 // začátek zvoleného období (ms) – „Dnes“ od půlnoci místního času; null = bez omezení
+// Vlastní období Od–do (dny včetně, místní čas); hodnoty ve tvaru RRRR-MM-DD z <input type="date">
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const dayStart = v => { const [y, m, d] = v.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
+function rangeVals() {
+  let f = $("#r-from").value, t = $("#r-to").value;
+  if (f && t && f > t) [f, t] = [t, f];
+  return [f, t];
+}
 const periodSince = () => period === "today" ? new Date().setHours(0, 0, 0, 0)
+                        : period === "range" ? (rangeVals()[0] ? dayStart(rangeVals()[0]) : null)
                         : PERIOD_MS[period] ? Date.now() - PERIOD_MS[period] : null;
+// konec období (ms, bez) – jen u Od–do
+const periodUntil = () => period === "range" && rangeVals()[1] ? dayStart(rangeVals()[1]) + 864e5 : null;
+const czDay = v => { const [y, m, d] = v.split("-").map(Number); return `${d}. ${m}.`; };
 const PERIOD_TXT = { all: "Celkem", "30d": "Za 30 dní", "7d": "Za 7 dní", "24h": "Za 24 h", today: "Dnes" };
+const periodLabel = () => period === "range"
+  ? (([f, t]) => f || t ? `Od ${f ? czDay(f) : "začátku"} do ${t ? czDay(t) : "dnes"}` : "Celkem")(rangeVals())
+  : PERIOD_TXT[period] || "Celkem";
 
 function covRow(c) {
   const day = new Date(c.started_at).toLocaleDateString("cs-CZ", {day:"numeric", month:"numeric"});
@@ -290,9 +314,10 @@ function renderCoverage(streams) {
     return;
   }
   // období: vysílání, která do něj aspoň zčásti zasahují (bráno celé)
-  const since = periodSince();
-  const list = coverage.filter(c => !since || c.live || new Date(c.ended_at).getTime() >= since);
-  const label = PERIOD_TXT[period] || "Celkem";
+  const since = periodSince(), until = periodUntil();
+  const list = coverage.filter(c => (!since || c.live || new Date(c.ended_at).getTime() >= since)
+                                 && (!until || new Date(c.started_at).getTime() < until));
+  const label = periodLabel();
   if (!list.length) { box.innerHTML = `<div class="gaps">${label}: v tomto období žádné vysílání.</div>`; return; }
   const total = list.reduce((a, c) => a + c.total_seconds, 0);
   const miss = list.reduce((a, c) => a + c.missing_seconds, 0);
@@ -387,6 +412,7 @@ async function refresh() {
     $("#who").innerHTML = "@" + esc(s) + (live ? '<span class="live">LIVE</span>' : "");
     const my = ++seq;      // starší odpověď (pomalá síť) nesmí přepsat novější
     const args = { p_streamer: s, p_period: period, p_stream_id: streamId ? Number(streamId) : null };
+    if (period === "range") { const [f, t] = rangeVals(); args.p_from = f || null; args.p_to = t || null; }
     const [rows, totArr, topArr] = await Promise.all([
       rpc("leaderboard", { ...args, p_limit: query ? PAGE : Math.min(start + shown, 5000), p_search: query || null }),
       rpc("leaderboard_totals", args),
@@ -398,9 +424,10 @@ async function refresh() {
     $("#s-d").textContent = fmt(tot.diamonds);
     $("#s-k").textContent = czk(tot.diamonds);
     $("#s-u").textContent = fmt(donors);
-    const since = periodSince();       // vysílání, která do období aspoň zčásti zasahují
+    const since = periodSince(), until = periodUntil();   // vysílání, která do období aspoň zčásti zasahují
     $("#s-s").textContent = fmt(streamId || period === "last" ? Math.min(1, streams.length)
-      : streams.filter(x => !since || !x.ended_at || new Date(x.ended_at).getTime() >= since).length);
+      : streams.filter(x => (!since || !x.ended_at || new Date(x.ended_at).getTime() >= since)
+                         && (!until || new Date(x.started_at).getTime() < until)).length);
     const tg = topArr[0];   // největší jednotlivý dar
     const gimg = tg && tg.image_ver
       ? `<img src="${CFG.supabaseUrl}/storage/v1/object/public/gifts/${encodeURIComponent(tg.gift_id)}?v=${tg.image_ver}" alt="" onerror="this.replaceWith('🎁')">`
@@ -456,11 +483,19 @@ function pager(donors) {
 $("#tabs").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
-  period = b.dataset.p; streamId = ""; $("#stream").value = ""; start = 0; shown = PAGE; refresh();
+  period = b.dataset.p; streamId = ""; $("#stream").value = ""; start = 0; shown = PAGE;
+  $("#range").hidden = period !== "range";
+  if (period === "range" && !$("#r-to").value) {          // výchozí: posledních 7 dní
+    const today = new Date(); $("#r-to").value = ymd(today);
+    $("#r-from").value = ymd(new Date(Math.max(today.getTime() - 6 * 864e5, dayStart($("#r-from").min))));
+  }
+  refresh();
 });
+$("#range").addEventListener("change", () => { start = 0; shown = PAGE; refresh(); });
 $("#stream").addEventListener("change", e => {
   streamId = e.target.value; start = 0; shown = PAGE;
   document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", !streamId && x.dataset.p === period));
+  $("#range").hidden = !!streamId || period !== "range";
   refresh();
 });
 $("#streamer").addEventListener("change", () => { streamId = ""; start = 0; shown = PAGE; refresh(); });
@@ -481,6 +516,7 @@ $("#q").addEventListener("input", e => {
 });
 
 (async () => {
+  $("#r-from").max = $("#r-to").max = ymd(new Date());
   const mail = CONTACT.join("@"); $("#mail").href = "mailto:" + mail; $("#mail").textContent = mail;
   if (CFG.built) $("#ver").innerHTML = "<br>Poslední úprava webu: " + esc(CFG.built);
   if (!CFG.supabaseUrl || !CFG.supabaseKey) { showError("Chybí konfigurace Supabase (config.js)."); return; }
