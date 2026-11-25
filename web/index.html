@@ -41,8 +41,14 @@
   .stat-top { min-width:170px; } .stat-top b { display:flex; align-items:center; gap:5px; }
   .stat-top .sub { display:block; color:var(--muted); font-size:12px; margin-top:1px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .stat-top .sub a { color:var(--fg); text-decoration:none; }
-  .stat-top .gico { width:28px; height:28px; display:inline-grid; place-items:center; font-size:20px; margin-right:2px; }
-  .stat-top .gico img { width:100%; height:100%; object-fit:contain; }
+  .stat-top { position:relative; padding-right:96px; }
+  .stat-top .gbig { position:absolute; right:14px; top:50%; transform:translateY(-50%); width:74px; height:74px;
+                    display:grid; place-items:center; font-size:46px; pointer-events:none; }   /* obrázek daru vpravo */
+  .stat-top .gbig img { width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 4px 10px rgba(0,0,0,.45)); }
+  @media (max-width:560px) {   /* mobil: obrázek doprostřed volného místa vpravo od textu */
+    .stat-top { padding-right:10px; } .stat-top .sub { max-width:52% !important; }
+    .stat-top .gbig { right:auto; left:66%; transform:translate(-50%, -50%); }
+  }
   table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
   th, td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); }
   th { color:var(--muted); font-weight:500; font-size:13px; }
@@ -142,7 +148,7 @@
     <div class="stat" title="Odhad: tvůrce dostane zhruba polovinu ceny daru (~0,005 USD za minci), před daní a poplatky"><small>Výdělek ≈</small><b id="s-k">0 Kč</b></div>
     <div class="stat"><small>Dárců</small><b id="s-u">0</b></div>
     <div class="stat"><small>Vysílání</small><b id="s-s">0</b></div>
-    <div class="stat stat-top" title="Nejdražší jednotlivý dar ve zvoleném období (série darů = jeden dar)"><small>Největší dar</small><b id="s-g">–</b><span class="sub" id="s-gi"></span></div>
+    <div class="stat stat-top" title="Nejdražší jednotlivý dar ve zvoleném období (série darů = jeden dar)"><small>Největší dar</small><b id="s-g">–</b><span class="sub" id="s-gi"></span><span class="gbig" id="s-gb"></span></div>
   </div>
   <div class="gapnote" id="gapnote"></div>
   <div class="podium" id="podium"></div>
@@ -399,8 +405,10 @@ async function refresh() {
     const gimg = tg && tg.image_ver
       ? `<img src="${CFG.supabaseUrl}/storage/v1/object/public/gifts/${encodeURIComponent(tg.gift_id)}?v=${tg.image_ver}" alt="" onerror="this.replaceWith('🎁')">`
       : "🎁";
-    const gHtml = tg ? `<span class="gico">${gimg}</span><i class="coin" aria-hidden="true"></i>${fmt(tg.diamonds)}` : "–";
-    if ($("#s-g").dataset.h !== gHtml) { $("#s-g").innerHTML = gHtml; $("#s-g").dataset.h = gHtml; }   // obrázek neblikat
+    const gHtml = tg ? `<i class="coin" aria-hidden="true"></i>${fmt(tg.diamonds)}` : "–";
+    if ($("#s-g").dataset.h !== gHtml) { $("#s-g").innerHTML = gHtml; $("#s-g").dataset.h = gHtml; }
+    const bHtml = tg ? gimg : "";
+    if ($("#s-gb").dataset.h !== bHtml) { $("#s-gb").innerHTML = bHtml; $("#s-gb").dataset.h = bHtml; }   // obrázek neblikat
     $("#s-gi").innerHTML = tg ? `${esc(tg.gift_name || "dar")}${tg.count > 1 ? " ×" + fmt(tg.count) : ""} · ${tg.unique_id
         ? `<a href="https://www.tiktok.com/@${encodeURIComponent(tg.unique_id)}" target="_blank" rel="noopener noreferrer">@${esc(tg.unique_id)}</a>`
         : "@" + esc(tg.user_id)}` : "";
