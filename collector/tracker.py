@@ -195,6 +195,13 @@ class Store:
         else:
             await self._req("POST", "/rpc/set_room_start", json={"p_stream_id": stream_id, "p_started_at": iso})
 
+    async def set_play_url(self, stream_id: int, url: str) -> None:
+        """Přímá adresa videa (FLV z CDN TikToku) pro přehrávač na webu – ve filtru „Poslední LIVE“."""
+        if self.token:
+            await self._rpc("collector_play_url", p_stream_id=stream_id, p_url=url)
+        else:
+            await self._req("POST", "/rpc/set_play_url", json={"p_stream_id": stream_id, "p_url": url})
+
     async def heartbeat(self, name: str, streamers: list[str], record_enabled: bool) -> None:
         """Každých 30 s zapíše do tabulky collectors, že sběrač žije (web ukazuje online/offline)."""
         started, failed = now_iso(), False
@@ -1018,6 +1025,10 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
             async def room_start(stream_id: int) -> None:
                 try:
                     info = await client.web.fetch_room_info() or {}
+                except Exception as ex:
+                    log.debug("@%s: room info se nepodařilo načíst: %s", streamer, ex)
+                    return
+                try:
                     started = float(info.get("create_time") or info.get("start_time") or 0)
                     if started > 1e12:                       # ms → s
                         started /= 1000
@@ -1025,6 +1036,19 @@ async def watch(streamer: str, store: Store, interval: int, rec_cfg: RecordConfi
                         await store.set_room_start(stream_id, started)
                 except Exception as ex:
                     log.debug("@%s: začátek vysílání se nepodařilo zjistit: %s", streamer, ex)
+                # video pro web: výchozí hd (540p) šetří data divákům; WEB_QUALITY=off přehrávač vypne
+                quality = (os.getenv("WEB_QUALITY") or "hd").strip().lower()
+                if quality in ("0", "off", "ne", "no"):
+                    return
+                url = pick_stream_url(info, quality if quality in QUALITIES else "hd")
+                if url and url.startswith("https://"):
+                    try:
+                        await store.set_play_url(stream_id, url)
+                        log.info("@%s: adresa videa pro web uložena (%s)", streamer, url.split("/")[2])
+                    except Exception as ex:
+                        log.warning("@%s: adresu videa pro web se nepodařilo uložit: %s", streamer, ex)
+                else:
+                    log.info("@%s: adresa videa pro web nenalezena", streamer)
 
             @client.on(ConnectEvent)
             async def _on_connect(ev: ConnectEvent):

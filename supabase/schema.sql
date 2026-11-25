@@ -690,3 +690,51 @@ revoke all on function public.visits_summary(date, date)  from public, anon, aut
 grant execute on function public.track_view(text)         to anon, authenticated;
 grant execute on function public.visits_summary(date, date) to service_role;
 grant select, insert, update on public.visit_reports to service_role;   -- sběrač: kdy byl odeslán týdenní souhrn
+
+-- ---------------------------------------------------------------- přehrávač LIVE na webu (od 25. 11.)
+-- Sběrač při startu vysílání uloží přímou FLV adresu streamu z CDN TikToku (podepsaná, platí ~14 dní).
+-- Web ji přehraje (mpegts.js) ve filtru „Poslední LIVE“, jen dokud vysílání běží.
+alter table public.streams add column if not exists play_url text;
+
+create or replace function public._set_play_url(p_stream_id bigint, p_url text)
+returns void
+language sql volatile security definer set search_path = public as $$
+    update streams set play_url = p_url
+    where id = p_stream_id and ended_at is null
+      and p_url ~ '^https://[a-z0-9.-]+\.(tiktokcdn[a-z-]*|ttlivecdn|byteoversea|ibytedtos)\.(com|net)/'
+      and length(p_url) < 2000;
+$$;
+
+create or replace function public.set_play_url(p_stream_id bigint, p_url text)     -- sběrač vlastníka (secret klíč)
+returns void language sql volatile security definer set search_path = public as $$
+    select _set_play_url(p_stream_id, p_url);
+$$;
+
+create or replace function public.collector_play_url(p_token text, p_stream_id bigint, p_url text)
+returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare s text;
+begin
+    select streamer into s from streams where id = p_stream_id;
+    if s is null then return; end if;
+    perform _collector_auth(p_token, s);
+    perform _set_play_url(p_stream_id, p_url);
+end $$;
+
+-- Pro web: běžící vysílání účtu s adresou videa (nic, když účet nevysílá nebo adresa chybí).
+create or replace function public.live_player(p_streamer text)
+returns table (stream_id bigint, play_url text)
+language sql stable security definer set search_path = public as $$
+    select id, play_url from streams
+    where streamer = lower(ltrim(p_streamer, '@')) and ended_at is null and play_url is not null
+    order by started_at desc
+    limit 1;
+$$;
+
+revoke all on function public._set_play_url(bigint, text)                  from public, anon, authenticated;
+revoke all on function public.set_play_url(bigint, text)                   from public, anon, authenticated;
+revoke all on function public.collector_play_url(text, bigint, text)       from public, anon, authenticated;
+revoke all on function public.live_player(text)                            from public, anon, authenticated;
+grant execute on function public.set_play_url(bigint, text)                to service_role;
+grant execute on function public.collector_play_url(text, bigint, text)    to anon;
+grant execute on function public.live_player(text)                         to anon, authenticated;

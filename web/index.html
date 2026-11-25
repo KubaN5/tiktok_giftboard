@@ -122,6 +122,20 @@
           background:radial-gradient(circle at 35% 30%, #fff6b0 0, #ffd84a 40%, #f5b400 100%); box-shadow:inset 0 0 0 .08em #e09a00; }
   .coin::after { content:""; position:absolute; inset:28%; border-radius:50%; border:.07em solid rgba(176,110,0,.55); }
   .cov .okfold summary { cursor:pointer; font-size:14px; }
+  /* přehrávač LIVE (filtr „Poslední LIVE“, nad věnci) */
+  .lp { margin:20px auto 0; max-width:380px; background:var(--card); border:1px solid rgba(254,44,85,.45); border-radius:12px; padding:10px;
+        box-shadow:0 0 0 1px rgba(254,44,85,.12), 0 10px 30px rgba(254,44,85,.12); }
+  .lp[hidden] { display:none; }
+  .lp-head { display:flex; align-items:center; gap:8px; margin:0 2px 8px; font-weight:700; }
+  .lp-head .live { margin-left:0; animation:pulse 2s infinite; }
+  .lp-head a { margin-left:auto; color:var(--acc2); text-decoration:none; font-size:13px; font-weight:600; white-space:nowrap; }
+  .lp-frame { position:relative; aspect-ratio:9/16; width:min(100%, calc(64vh * 9 / 16)); min-width:200px; margin:auto; background:#000; border-radius:8px; overflow:hidden; }
+  .lp-frame video { display:block; width:100%; height:100%; object-fit:contain; background:#000; }
+  .lp-msg { position:absolute; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+            padding:20px; text-align:center; color:var(--muted); font-size:14px; background:rgba(0,0,0,.75); }
+  .lp-msg.show { display:flex; }
+  .lp-msg a { color:#fff; background:var(--acc); padding:8px 14px; border-radius:8px; text-decoration:none; font-weight:700; }
+  .lp-note { margin:8px 2px 0; color:var(--muted); font-size:12px; text-align:center; }
   .cov .okfold .row:first-of-type { border-top:1px solid var(--line); margin-top:8px; }
 </style>
 </head>
@@ -160,6 +174,11 @@
     <div class="stat stat-top" title="Nejdražší jednotlivý dar ve zvoleném období (série darů = jeden dar)"><small>Největší dar</small><b id="s-g">–</b><span class="sub" id="s-gi"></span><span class="gbig" id="s-gb"></span></div>
   </div>
   <div class="gapnote" id="gapnote"></div>
+  <section class="lp" id="livebox" hidden aria-label="Živé vysílání">
+    <div class="lp-head"><span class="live">LIVE</span><span>Právě vysílá</span><a id="lp-link" href="#" target="_blank" rel="noopener noreferrer">Otevřít na TikToku ↗</a></div>
+    <div class="lp-frame"><video id="lp-video" muted autoplay playsinline controls></video><div class="lp-msg" id="lp-msg"></div></div>
+    <div class="lp-note">Zvuk zapneš v přehrávači. Dárky a komentáře jen přímo na TikToku.</div>
+  </section>
   <div class="podium" id="podium"></div>
   <div class="search"><input id="q" type="search" placeholder="Hledat dárce (jméno nebo @účet)…" autocomplete="off" enterkeyhint="search"><small id="qinfo"></small></div>
   <table>
@@ -401,6 +420,59 @@ function renderPodium(rows) {
   if (html !== podiumHtml) { box.innerHTML = podiumHtml = html; }   // beze změny nepřekreslovat (fotky neblikají)
 }
 
+// Přehrávač LIVE: jen ve filtru „Poslední LIVE“, když vysílání běží. Sběrač uloží přímou FLV adresu z CDN TikToku
+// (live_player), web ji přehraje přes mpegts.js (Media Source Extensions; iPhone od iOS 17.1). Neoficiální – TikTok to
+// může kdykoli zatrhnout; pak se ukáže odkaz na TikTok.
+const LP_LIB = "vendor/mpegts-1.8.2.min.js";
+let lp = null, lpUrl = "", lpFails = 0, lpSeq = 0, lpGen = 0, lpLib = null, lpRetry = null;   // lpSeq = dotaz, lpGen = adresa
+const loadMpegts = () => lpLib ||= new Promise((res, rej) => {
+  const sc = document.createElement("script"); sc.src = LP_LIB;
+  sc.onload = () => res(window.mpegts); sc.onerror = () => { lpLib = null; rej(new Error("mpegts.js")); };
+  document.head.appendChild(sc);
+});
+function lpMsg(html) { const m = $("#lp-msg"); m.innerHTML = html || ""; m.classList.toggle("show", !!html); }
+function lpDestroy() {
+  clearTimeout(lpRetry);
+  if (lp) { try { lp.pause(); lp.unload(); lp.detachMediaElement(); lp.destroy(); } catch {} lp = null; }
+}
+function stopLive() { lpSeq++; lpGen++; lpDestroy(); lpUrl = ""; lpFails = 0; lpMsg(""); $("#livebox").hidden = true; }
+async function renderLive(s, streams) {
+  if (period !== "last" || streamId || !streams[0] || streams[0].ended_at) return stopLive();
+  const my = ++lpSeq;
+  let info;
+  try { info = (await rpc("live_player", { p_streamer: s }))[0]; } catch (e) { console.warn(e); return; }
+  if (my !== lpSeq) return;
+  if (!info?.play_url) return stopLive();
+  const link = `https://www.tiktok.com/@${encodeURIComponent(s)}/live`;
+  $("#lp-link").href = link;
+  $("#livebox").hidden = false;
+  if (info.play_url === lpUrl) return;                 // už hraje (nebo to po chybách vzdal)
+  lpDestroy(); lpUrl = info.play_url; lpFails = 0; lpMsg("");
+  const gen = ++lpGen;
+  const fallback = why => lpMsg(`<span>${why}</span><a href="${link}" target="_blank" rel="noopener noreferrer">Sledovat na TikToku</a>`);
+  let mp;
+  try { mp = await loadMpegts(); } catch { fallback("Přehrávač se nepodařilo načíst."); return; }
+  if (gen !== lpGen) return;
+  if (!mp.isSupported() || !mp.getFeatureList().mseLivePlayback) { fallback("Tenhle prohlížeč video z LIVE přehrát neumí."); return; }
+  const video = $("#lp-video");
+  video.disableRemotePlayback = true;                  // iPhone (ManagedMediaSource) to vyžaduje
+  const start = () => {
+    lpDestroy();
+    lp = mp.createPlayer({ type: "flv", isLive: true, url: lpUrl },
+                         { isLive: true, lazyLoad: false, autoCleanupSourceBuffer: true,
+                           liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 6, liveBufferLatencyMinRemain: 1.5 });
+    lp.on(mp.Events.ERROR, (type, detail) => {
+      console.warn("LIVE přehrávač:", type, detail);
+      lpDestroy();
+      if (++lpFails >= 3) { fallback("Video z LIVE se teď nedaří přehrát."); return; }
+      lpRetry = setTimeout(() => { if (gen === lpGen) start(); }, 4000 * lpFails);
+    });
+    lp.attachMediaElement(video); lp.load();
+    const pr = video.play(); if (pr) pr.catch(() => {});
+  };
+  start();
+}
+
 async function refresh() {
   try {
     const s = $("#streamer").value;
@@ -408,6 +480,7 @@ async function refresh() {
     localStorage.setItem("streamer", s);
     const streams = await loadStreams();
     renderCoverage(streams);
+    renderLive(s, streams);
     const live = streams.some(x => !x.ended_at);
     $("#who").innerHTML = "@" + esc(s) + (live ? '<span class="live">LIVE</span>' : "");
     const my = ++seq;      // starší odpověď (pomalá síť) nesmí přepsat novější
