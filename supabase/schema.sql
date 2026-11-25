@@ -129,7 +129,7 @@ language sql stable security definer set search_path = public as $$
     limit 200;
 $$;
 
--- p_period: all | 24h | 7d | 30d | last (poslední vysílání); p_stream_id má přednost
+-- p_period: all | 24h | today (od půlnoci českého času) | 7d | 30d | last (poslední vysílání); p_stream_id má přednost
 -- p_search: hledání v @handle / přezdívce; pořadí (rank) zůstává celkové, filtruje se až po očíslování
 drop function if exists public.leaderboard(text, text, bigint, int);
 drop function if exists public.leaderboard(text, text, bigint, int, text);  -- změna návratových sloupců (avatar_ver)
@@ -155,6 +155,7 @@ language sql stable security definer set search_path = public as $$
                ) as stream_id,
                case p_period
                    when '24h' then now() - interval '24 hours'
+                   when 'today' then date_trunc('day', now() at time zone 'Europe/Prague') at time zone 'Europe/Prague'
                    when '7d'  then now() - interval '7 days'
                    when '30d' then now() - interval '30 days'
                end as since,
@@ -215,6 +216,7 @@ language sql stable security definer set search_path = public as $$
                ) as stream_id,
                case p_period
                    when '24h' then now() - interval '24 hours'
+                   when 'today' then date_trunc('day', now() at time zone 'Europe/Prague') at time zone 'Europe/Prague'
                    when '7d'  then now() - interval '7 days'
                    when '30d' then now() - interval '30 days'
                end as since
@@ -250,6 +252,7 @@ language sql stable security definer set search_path = public as $$
                ) as stream_id,
                case p_period
                    when '24h' then now() - interval '24 hours'
+                   when 'today' then date_trunc('day', now() at time zone 'Europe/Prague') at time zone 'Europe/Prague'
                    when '7d'  then now() - interval '7 days'
                    when '30d' then now() - interval '30 days'
                end as since

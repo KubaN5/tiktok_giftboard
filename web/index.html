@@ -130,6 +130,7 @@
       <button data-p="30d">30 dní</button>
       <button data-p="7d">7 dní</button>
       <button data-p="24h">24 h</button>
+      <button data-p="today">Dnes</button>
       <button data-p="last">Poslední LIVE</button>
     </div>
     <select id="stream"><option value="">— konkrétní vysílání —</option></select>
@@ -242,7 +243,10 @@ async function loadStreams() {
 // Výpadky sběru podle filtru: konkrétní / poslední vysílání = detail jednoho vysílání,
 // 24 h / 7 dní / 30 dní / Celkem = souhrn za období + jen vysílání s výpadkem (ostatní sbalená)
 const PERIOD_MS = { "24h": 864e5, "7d": 7 * 864e5, "30d": 30 * 864e5 };
-const PERIOD_TXT = { all: "Celkem", "30d": "Za 30 dní", "7d": "Za 7 dní", "24h": "Za 24 h" };
+// začátek zvoleného období (ms) – „Dnes“ od půlnoci místního času; null = bez omezení
+const periodSince = () => period === "today" ? new Date().setHours(0, 0, 0, 0)
+                        : PERIOD_MS[period] ? Date.now() - PERIOD_MS[period] : null;
+const PERIOD_TXT = { all: "Celkem", "30d": "Za 30 dní", "7d": "Za 7 dní", "24h": "Za 24 h", today: "Dnes" };
 
 function covRow(c) {
   const day = new Date(c.started_at).toLocaleDateString("cs-CZ", {day:"numeric", month:"numeric"});
@@ -280,7 +284,7 @@ function renderCoverage(streams) {
     return;
   }
   // období: vysílání, která do něj aspoň zčásti zasahují (bráno celé)
-  const since = PERIOD_MS[period] ? Date.now() - PERIOD_MS[period] : null;
+  const since = periodSince();
   const list = coverage.filter(c => !since || c.live || new Date(c.ended_at).getTime() >= since);
   const label = PERIOD_TXT[period] || "Celkem";
   if (!list.length) { box.innerHTML = `<div class="gaps">${label}: v tomto období žádné vysílání.</div>`; return; }
@@ -388,7 +392,9 @@ async function refresh() {
     $("#s-d").textContent = fmt(tot.diamonds);
     $("#s-k").textContent = czk(tot.diamonds);
     $("#s-u").textContent = fmt(donors);
-    $("#s-s").textContent = fmt(streamId || period === "last" ? Math.min(1, streams.length) : streams.length);
+    const since = periodSince();       // vysílání, která do období aspoň zčásti zasahují
+    $("#s-s").textContent = fmt(streamId || period === "last" ? Math.min(1, streams.length)
+      : streams.filter(x => !since || !x.ended_at || new Date(x.ended_at).getTime() >= since).length);
     const tg = topArr[0];   // největší jednotlivý dar
     const gimg = tg && tg.image_ver
       ? `<img src="${CFG.supabaseUrl}/storage/v1/object/public/gifts/${encodeURIComponent(tg.gift_id)}?v=${tg.image_ver}" alt="" onerror="this.replaceWith('🎁')">`
